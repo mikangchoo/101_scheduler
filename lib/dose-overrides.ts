@@ -10,6 +10,7 @@ export type DoseKey =
   | "mtx_mg_m2"
   | "ptcy_mg_kg"
   | "conditioning_cyclo_mg_kg"
+  | "mmf_mg_kg"
 
 export type DoseOverrides = Partial<Record<DoseKey, number>>
 
@@ -33,9 +34,11 @@ export const DEFAULT_DOSES: Record<string, Partial<Record<DoseKey, number>>> = {
   },
   "buflu-ptcy": {
     busulfan_mg_kg: 3.2,
-    fludarabine_mg_m2: 40,
+    // Busulfan/Fludarabine-PTCy [MAC]: Fludarabine 25 mg/m²
+    fludarabine_mg_m2: 25,
     conditioning_cyclo_mg_kg: 14.5,
     ptcy_mg_kg: 50,
+    mmf_mg_kg: 15,
   },
 }
 

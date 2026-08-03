@@ -7,7 +7,8 @@ import { StepHeader } from "@/components/step-header"
 import { useFlow } from "@/contexts/flow-context"
 import { findRegimen } from "@/lib/regimens"
 import { computeCalc, isValidPatient } from "@/lib/calc"
-import { buildRegimenLines, type RenderLine, type Segment } from "@/lib/regimen-render"
+import { buildRegimenLines, type Segment } from "@/lib/regimen-render"
+import { adjustRegimenLines, type AdjustedLine } from "@/lib/regimen-adjust"
 import type { DoseKey } from "@/lib/dose-overrides"
 import { cn } from "@/lib/utils"
 
@@ -26,9 +27,13 @@ export default function RegimenConfirmPage() {
     else if (!isValidPatient(patient)) router.replace("/patient")
   }, [hydrated, regimen, patient, router])
 
-  const lines = useMemo<RenderLine[]>(() => {
+  const lines = useMemo<AdjustedLine[]>(() => {
     if (!isValidPatient(patient) || !regimenId) return []
-    return buildRegimenLines(regimenId, computeCalc(patient), doseOverrides)
+    const calc = computeCalc(patient)
+    return adjustRegimenLines(buildRegimenLines(regimenId, calc, doseOverrides), {
+      regimenId,
+      calc,
+    })
   }, [patient, regimenId, doseOverrides])
 
   if (!hydrated || !regimen || !isValidPatient(patient)) return null
@@ -37,6 +42,10 @@ export default function RegimenConfirmPage() {
 
   function updateDose(key: DoseKey, value: number) {
     setDoseOverrides((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function toggle(id: string) {
+    setChecked((c) => ({ ...c, [id]: !c[id] }))
   }
 
   return (
@@ -57,12 +66,14 @@ export default function RegimenConfirmPage() {
 
         {/* Printable regimen document */}
         <article className="print-area overflow-hidden rounded-xl border border-ocs-border bg-ocs-panel shadow-lg">
-          {/* Print-only header: centered bold title + patient info box */}
+          {/* Print-only header: centered bold title + 우측 계산값 박스 */}
           <div className="print-only px-8 pt-6">
-            <h1 className="text-center text-lg font-bold text-ocs-header">{title}</h1>
-            <div className="mt-3 flex justify-end">
+            <div className="flex items-start justify-between gap-6">
+              <h1 className="flex-1 text-center text-lg font-bold text-ocs-header">{title}</h1>
               <PatientBox patient={patient} />
             </div>
+            {/* 레지멘 제목 / 환자 계산값과 본문(체크박스) 사이 3줄 간격 */}
+            <div className="h-[4.5rem]" aria-hidden="true" />
           </div>
 
           <div className="regimen-scroll max-h-[62vh] overflow-y-auto px-6 py-6 sm:px-8">
@@ -71,11 +82,9 @@ export default function RegimenConfirmPage() {
                 key={i}
                 line={line}
                 checked={line.id ? !!checked[line.id] : false}
-                onToggle={
-                  line.id
-                    ? () => setChecked((c) => ({ ...c, [line.id!]: !c[line.id!] }))
-                    : undefined
-                }
+                checkedRight={line.idRight ? !!checked[line.idRight] : false}
+                onToggle={line.id ? () => toggle(line.id!) : undefined}
+                onToggleRight={line.idRight ? () => toggle(line.idRight!) : undefined}
                 onDoseChange={updateDose}
               />
             ))}
@@ -118,34 +127,73 @@ function PatientBox({
 }: {
   patient: { name: string; sex: "male" | "female"; heightCm: number; weightKg: number }
 }) {
+  const calc = computeCalc(patient)
   return (
-    <div className="rounded-md border border-ocs-border bg-ocs-row px-4 py-2 text-sm text-ocs-text">
-      <div className="grid grid-cols-[auto_auto] gap-x-6 gap-y-0.5">
-        <span className="text-ocs-muted">이름</span>
-        <span className="font-medium">{patient.name || "-"}</span>
-        <span className="text-ocs-muted">성별</span>
-        <span className="font-medium">{patient.sex === "male" ? "남" : "여"}</span>
-        <span className="text-ocs-muted">키</span>
-        <span className="font-medium">{patient.heightCm} cm</span>
-        <span className="text-ocs-muted">몸무게</span>
-        <span className="font-medium">{patient.weightKg} kg</span>
+    <div className="shrink-0 rounded-md border border-ocs-border bg-ocs-row px-4 py-2 text-right text-sm text-ocs-text">
+      <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-right">
+        <span className="text-ocs-muted">Actual BWT</span>
+        <span className="font-mono font-medium">{calc.tbw} kg</span>
+        <span className="text-ocs-muted">ABW 25</span>
+        <span className="font-mono font-medium">{calc.abw25} kg</span>
+        <span className="text-ocs-muted">BSA</span>
+        <span className="font-mono font-medium">{calc.bsa} m²</span>
       </div>
     </div>
+  )
+}
+
+function LineCheckbox({
+  checked,
+  onToggle,
+  className,
+}: {
+  checked: boolean
+  onToggle?: () => void
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={checked}
+      aria-label="오더 체크박스"
+      className={cn(
+        "not-italic inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-ocs-muted text-[10px] font-bold leading-none",
+        checked ? "bg-ocs-highlight text-white" : "bg-transparent text-transparent",
+        className,
+      )}
+    >
+      ✓
+    </button>
   )
 }
 
 function RegimenLineRow({
   line,
   checked,
+  checkedRight,
   onToggle,
+  onToggleRight,
   onDoseChange,
 }: {
-  line: RenderLine
+  line: AdjustedLine
   checked: boolean
+  checkedRight: boolean
   onToggle?: () => void
+  onToggleRight?: () => void
   onDoseChange: (key: DoseKey, value: number) => void
 }) {
-  const { text, segments, annotation, kind = "normal", indent = 0, italic, checkbox } = line
+  const {
+    text,
+    segments,
+    annotation,
+    kind = "normal",
+    indent = 0,
+    italic,
+    checkbox,
+    checkboxRight,
+    printHidden,
+  } = line
 
   if (kind === "spacer") return <div className="h-3" aria-hidden="true" />
 
@@ -154,13 +202,19 @@ function RegimenLineRow({
   return (
     <div
       className={cn(
-        "flex items-start justify-between gap-4 py-0.5 break-inside-avoid",
-        kind === "title" && "print:hidden",
+        "flex items-start gap-2 py-0.5 break-inside-avoid",
+        (kind === "title" || printHidden) && "print:hidden",
       )}
     >
+      {/* 체크박스 열: 항상 좌측 맨 앞 고정 정렬 (들여쓰기와 무관) */}
+      <span className="mt-[3px] flex w-4 shrink-0 justify-start">
+        {checkbox && <LineCheckbox checked={checked} onToggle={onToggle} />}
+      </span>
+
+      {/* 본문: 체크박스와 항상 같은 줄에서 시작 */}
       <p
         className={cn(
-          "flex min-w-0 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
+          "flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
           indentClass,
           kind === "title" && "mb-1 text-base font-bold text-ocs-header",
           kind === "section" && "mt-1 text-sm font-bold text-ocs-highlight",
@@ -169,28 +223,17 @@ function RegimenLineRow({
           italic && "italic",
         )}
       >
-        {checkbox && (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-pressed={checked}
-            aria-label="오더 체크박스"
-            className={cn(
-              "not-italic mr-1 inline-flex h-3.5 w-3.5 shrink-0 translate-y-0.5 items-center justify-center rounded-[3px] border border-ocs-muted text-[10px] font-bold leading-none",
-              checked ? "bg-ocs-highlight text-white" : "bg-transparent text-transparent",
-            )}
-          >
-            ✓
-          </button>
-        )}
         {segments ? (
-          segments.map((seg, i) => (
-            <SegmentView key={i} seg={seg} onDoseChange={onDoseChange} />
-          ))
+          segments.map((seg, i) => <SegmentView key={i} seg={seg} onDoseChange={onDoseChange} />)
         ) : (
           <span>{text}</span>
         )}
+        {/* 문장 끝(인라인) 체크박스 — 우측 정렬이 아니라 텍스트 바로 뒤 */}
+        {checkboxRight && (
+          <LineCheckbox checked={checkedRight} onToggle={onToggleRight} className="ml-1" />
+        )}
       </p>
+
       {annotation && (
         <span className="shrink-0 whitespace-nowrap font-mono text-sm font-semibold text-red-500">
           {annotation}
