@@ -18,7 +18,7 @@ export const REGIMEN_CATEGORIES: RegimenCategory[] = [
     id: "auto",
     label: "Auto",
     regimens: [
-      { id: "hdmel", label: "HDMEL", available: false, hasBusulfan: false },
+      { id: "hdmel", label: "HDMEL", available: true, hasBusulfan: false },
       { id: "bueam", label: "BuEAM", available: false, hasBusulfan: true },
       { id: "bucyeto", label: "BuCyEto", available: false, hasBusulfan: true },
       { id: "thiobucy", label: "ThioBuCy", available: true, hasBusulfan: true },
@@ -29,7 +29,7 @@ export const REGIMEN_CATEGORIES: RegimenCategory[] = [
     id: "allo",
     label: "Allo",
     regimens: [
-      { id: "buflubatg", label: "BuFluATG", available: false, hasBusulfan: true },
+      { id: "buflubatg", label: "BuFluATG", available: true, hasBusulfan: true },
       { id: "buflu-ptcy", label: "Buflu-PTCy", available: false, hasBusulfan: true },
       { id: "tbi-cy", label: "TBI-Cy", available: false, hasBusulfan: false },
     ],
