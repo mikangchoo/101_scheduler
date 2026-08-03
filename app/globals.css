@@ -176,18 +176,69 @@
   }
 }
 
+/* shown only when printing (hidden on screen) */
+.print-only {
+  display: none;
+}
+
+/* Scroll container on screen */
+.regimen-scroll {
+  overflow-y: auto;
+}
+
 @media print {
   .no-print {
     display: none !important;
   }
+
+  /* Show print-only content */
+  .print-only {
+    display: block !important;
+  }
+
+  /* Remove scroll lock — let content flow across pages */
+  .regimen-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
   html,
   body {
     background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt;
   }
+
   .print-area {
     box-shadow: none !important;
     border: none !important;
+    border-radius: 0 !important;
     margin: 0 !important;
     max-width: 100% !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Allow page breaks inside the document */
+  .break-inside-avoid {
+    break-inside: avoid;
+  }
+
+  /* Auto page-break when content overflows */
+  article.print-area {
+    page-break-after: auto;
+  }
+
+  /* Text colours for print */
+  .text-ocs-text,
+  .text-ocs-header,
+  .text-ocs-highlight,
+  .text-ocs-muted,
+  .text-ocs-time {
+    color: #000000 !important;
+  }
+
+  .text-red-500 {
+    color: #c00000 !important;
   }
 }

@@ -5,6 +5,9 @@ export type DoseKey =
   | "cyclo_mg_kg"
   | "melphalan_mg_m2"
   | "fludarabine_mg_m2"
+  | "atg_mg_kg"
+  | "mpred_mg_kg"
+  | "mtx_mg_m2"
   | "ptcy_mg_kg"
   | "conditioning_cyclo_mg_kg"
 
@@ -17,12 +20,16 @@ export const DEFAULT_DOSES: Record<string, Partial<Record<DoseKey, number>>> = {
     cyclo_mg_kg: 60,
   },
   hdmel: {
-    melphalan_mg_m2: 50,
+    // 100 mg/m² × D-3, D-2
+    melphalan_mg_m2: 100,
   },
   buflubatg: {
     busulfan_mg_kg: 3.2,
     fludarabine_mg_m2: 40,
-    conditioning_cyclo_mg_kg: 14.5,
+    // 1.5 for matched related; 2.5 for unrelated/mismatched (default unrelated)
+    atg_mg_kg: 2.5,
+    mpred_mg_kg: 1,
+    mtx_mg_m2: 15,
   },
   "buflu-ptcy": {
     busulfan_mg_kg: 3.2,
