@@ -15,48 +15,113 @@ interface Props {
 /**
  * 실제 처방되는 오더 행.
  * 레지멘 전문은 기울임체로 표시되고, 이 행(정자 + 수행시간)만 실제 오더다.
+ * 용매가 있는 오더는 묶음(bundle)으로 표시하고 수행시간은 윗줄만 표기한다.
  */
 export function OrderMedRow({ med, times, onChange, alt }: Props) {
+  const bundled = Boolean(med.solvent)
+
   return (
     <div
       className={cn(
-        "grid grid-cols-[1fr_auto] items-start gap-4 border-l-2 border-ocs-highlight px-3 py-1.5",
+        "border-l-2 border-ocs-highlight",
         alt ? "bg-ocs-row-alt" : "bg-ocs-row",
+        bundled && "relative",
       )}
     >
-      <div className="min-w-0">
-        <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
-          {med.sup && <Badge kind="SUP" />}
-          <span className="truncate">{med.name}</span>
-        </p>
-        <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
-        {med.note && <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>}
+      {bundled && <BundleBracket />}
+
+      <div className={cn("grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5", bundled && "pl-6")}>
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
+            {med.lastOralDose && <HoldIcon />}
+            {med.sup && <Badge kind="SUP" />}
+            <span className="truncate">{med.name}</span>
+          </p>
+          <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
+          {med.note && <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>}
+        </div>
+
+        <div className="shrink-0 text-right">
+          {med.scheduleKind === "thiotepa" ? (
+            <SelectTime med={med} times={times} onChange={onChange} />
+          ) : med.scheduleKind === "citopcin" ? (
+            <EditableTime
+              times={times}
+              options={[
+                { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
+                { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
+              ]}
+            />
+          ) : med.scheduleKind === "ursa" ? (
+            <EditableTime
+              times={times}
+              options={[
+                { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
+                { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
+              ]}
+            />
+          ) : (
+            <FixedTime
+              times={times}
+              suffix={med.suffix}
+              timeNote={med.timeNote}
+              solo={med.solo}
+              highlight={med.scheduleKind === "chemo"}
+            />
+          )}
+        </div>
       </div>
 
-      <div className="shrink-0 text-right">
-        {med.scheduleKind === "thiotepa" ? (
-          <ThiotepaTime med={med} times={times} onChange={onChange} />
-        ) : med.scheduleKind === "citopcin" ? (
-          <EditableTime
-            times={times}
-            options={[
-              { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
-              { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
-            ]}
-          />
-        ) : med.scheduleKind === "ursa" ? (
-          <EditableTime
-            times={times}
-            options={[
-              { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
-              { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
-            ]}
-          />
-        ) : (
-          <FixedTime times={times} suffix={med.suffix} highlight={med.scheduleKind === "chemo"} />
-        )}
-      </div>
+      {/* 용매 줄 — 수행시간 없음 */}
+      {med.solvent && (
+        <div className="grid grid-cols-[1fr_auto] items-start gap-4 px-3 pb-1.5 pl-6">
+          <p className="truncate text-[13px] not-italic text-ocs-text">{med.solvent}</p>
+          <span aria-hidden="true" />
+        </div>
+      )}
+
+      {/* 경구약 첫 투약 — +1 오더 (스케줄링 없음) */}
+      {med.firstOralDose && (
+        <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-ocs-border/60 px-3 py-1.5">
+          <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
+            <PlusOneIcon />
+            <span className="truncate">{med.name}</span>
+          </p>
+          <span aria-hidden="true" />
+        </div>
+      )}
     </div>
+  )
+}
+
+/** 묶음 오더 좌측 대괄호 */
+function BundleBracket() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute bottom-1.5 left-1.5 top-1.5 w-2 rounded-l-sm border-y border-l border-ocs-text/70"
+    />
+  )
+}
+
+/** 경구약 첫 투약 시 생성되는 +1 아이콘 */
+function PlusOneIcon() {
+  return (
+    <span className="not-italic rounded-sm bg-sky-600 px-1 py-[1px] text-[10px] font-bold leading-none text-white">
+      +1
+    </span>
+  )
+}
+
+/** 경구약 마지막 투약 조제유보 아이콘 */
+function HoldIcon() {
+  return (
+    <span
+      title="조제유보"
+      className="not-italic rounded-sm border border-ocs-text/60 bg-transparent px-1 py-[1px] text-[10px] font-bold leading-none text-ocs-text"
+    >
+      유보
+    </span>
   )
 }
 
@@ -79,10 +144,14 @@ export function Badge({ kind }: { kind: "SUP" | "PRN" | "TIT" }) {
 function FixedTime({
   times,
   suffix,
+  timeNote,
+  solo,
   highlight,
 }: {
   times: string[]
   suffix?: string
+  timeNote?: string
+  solo?: boolean
   highlight?: boolean
 }) {
   return (
@@ -90,12 +159,14 @@ function FixedTime({
       <span className={highlight ? "text-ocs-highlight" : "text-ocs-time"}>
         {times.map((t) => `${t}/`).join(" ")}
       </span>
+      {solo && <span className="ml-1 text-ocs-muted">(단독)</span>}
       {suffix && <span className="ml-1 text-ocs-highlight">({suffix})</span>}
+      {timeNote && <span className="ml-1 text-ocs-highlight/80">({timeNote})</span>}
     </span>
   )
 }
 
-function ThiotepaTime({
+function SelectTime({
   med,
   times,
   onChange,
@@ -124,6 +195,11 @@ function ThiotepaTime({
       </div>
       {med.suffix && (
         <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight">({med.suffix})/</span>
+      )}
+      {med.timeNote && (
+        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight/80">
+          ({med.timeNote})
+        </span>
       )}
     </div>
   )

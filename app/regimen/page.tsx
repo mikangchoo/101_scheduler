@@ -12,6 +12,15 @@ import { adjustRegimenLines, type AdjustedLine } from "@/lib/regimen-adjust"
 import type { DoseKey } from "@/lib/dose-overrides"
 import { cn } from "@/lib/utils"
 
+/** 소수 둘째 자리까지 표기, 둘째 자리가 0이면 첫째 자리까지만 표기 */
+function formatPatientNumber(value: number): string {
+  if (!Number.isFinite(value)) return "-"
+  const rounded = Math.round(value * 100) / 100
+  const two = rounded.toFixed(2)
+  if (two.endsWith("0")) return rounded.toFixed(1)
+  return two
+}
+
 export default function RegimenConfirmPage() {
   const router = useRouter()
   const { regimenId, patient, doseOverrides, setDoseOverrides } = useFlow()
@@ -66,14 +75,14 @@ export default function RegimenConfirmPage() {
 
         {/* Printable regimen document */}
         <article className="print-area overflow-hidden rounded-xl border border-ocs-border bg-ocs-panel shadow-lg">
-          {/* Print-only header: centered bold title + 우측 계산값 박스 */}
+          {/* Print-only header: 가운데 굵은 제목 + 제목 아래 우측 정렬 3줄 텍스트 (박스 없음) */}
           <div className="print-only px-8 pt-6">
-            <div className="flex items-start justify-between gap-6">
-              <h1 className="flex-1 text-center text-lg font-bold text-ocs-header">{title}</h1>
-              <PatientBox patient={patient} />
-            </div>
-            {/* 레지멘 제목 / 환자 계산값과 본문(체크박스) 사이 3줄 간격 */}
-            <div className="h-[4.5rem]" aria-hidden="true" />
+            <h1 className="text-center text-lg font-bold text-ocs-header">{title}</h1>
+            {/* 제목과 환자정보 사이: 한 줄 */}
+            <div className="h-[1em]" aria-hidden="true" />
+            <PatientHeaderLines patient={patient} showAbw={regimenId !== "hdmel"} />
+            {/* 환자정보와 본문 사이: 두 줄 */}
+            <div className="h-[2em]" aria-hidden="true" />
           </div>
 
           <div className="regimen-scroll max-h-[62vh] overflow-y-auto px-6 py-6 sm:px-8">
@@ -122,49 +131,21 @@ export default function RegimenConfirmPage() {
   )
 }
 
-function PatientBox({
+/** 제목 아래, 우측 정렬 3줄 (박스/보더 없음). ABW25는 showAbw가 true일 때만 표시 */
+function PatientHeaderLines({
   patient,
+  showAbw,
 }: {
   patient: { name: string; sex: "male" | "female"; heightCm: number; weightKg: number }
+  showAbw?: boolean
 }) {
   const calc = computeCalc(patient)
   return (
-    <div className="shrink-0 rounded-md border border-ocs-border bg-ocs-row px-4 py-2 text-right text-sm text-ocs-text">
-      <div className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-right">
-        <span className="text-ocs-muted">Actual BWT</span>
-        <span className="font-mono font-medium">{calc.tbw} kg</span>
-        <span className="text-ocs-muted">ABW 25</span>
-        <span className="font-mono font-medium">{calc.abw25} kg</span>
-        <span className="text-ocs-muted">BSA</span>
-        <span className="font-mono font-medium">{calc.bsa} m²</span>
-      </div>
+    <div className="text-right text-sm leading-snug text-ocs-text">
+      <div>Actual BWT {formatPatientNumber(calc.tbw)} kg</div>
+      {showAbw && <div>ABW 25 {formatPatientNumber(calc.abw25)} kg</div>}
+      <div>BSA {formatPatientNumber(calc.bsa)} m²</div>
     </div>
-  )
-}
-
-function LineCheckbox({
-  checked,
-  onToggle,
-  className,
-}: {
-  checked: boolean
-  onToggle?: () => void
-  className?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={checked}
-      aria-label="오더 체크박스"
-      className={cn(
-        "not-italic inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-ocs-muted text-[10px] font-bold leading-none",
-        checked ? "bg-ocs-highlight text-white" : "bg-transparent text-transparent",
-        className,
-      )}
-    >
-      ✓
-    </button>
   )
 }
 
@@ -189,7 +170,6 @@ function RegimenLineRow({
     annotation,
     kind = "normal",
     indent = 0,
-    italic,
     checkbox,
     checkboxRight,
     printHidden,
@@ -208,7 +188,7 @@ function RegimenLineRow({
     >
       {/* 체크박스 열: 항상 좌측 맨 앞 고정 정렬 (들여쓰기와 무관) */}
       <span className="mt-[3px] flex w-4 shrink-0 justify-start">
-        {checkbox && <LineCheckbox checked={checked} onToggle={onToggle} />}
+        {checkbox && <CheckBox checked={checked} onToggle={onToggle} />}
       </span>
 
       {/* 본문: 체크박스와 항상 같은 줄에서 시작 */}
@@ -217,10 +197,9 @@ function RegimenLineRow({
           "flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
           indentClass,
           kind === "title" && "mb-1 text-base font-bold text-ocs-header",
-          kind === "section" && "mt-1 text-sm font-bold text-ocs-highlight",
-          kind === "sub" && "text-sm font-semibold text-ocs-text",
+          kind === "section" && "mt-1 text-sm text-ocs-highlight",
+          kind === "sub" && "text-sm font-semibold",
           kind === "normal" && "text-sm",
-          italic && "italic",
         )}
       >
         {segments ? (
@@ -228,9 +207,9 @@ function RegimenLineRow({
         ) : (
           <span>{text}</span>
         )}
-        {/* 문장 끝(인라인) 체크박스 — 우측 정렬이 아니라 텍스트 바로 뒤 */}
+        {/* 문장 끝 인라인 체크박스 (예: H2 blocker or PPI) */}
         {checkboxRight && (
-          <LineCheckbox checked={checkedRight} onToggle={onToggleRight} className="ml-1" />
+          <CheckBox checked={checkedRight} onToggle={onToggleRight} className="ml-1" />
         )}
       </p>
 
@@ -240,6 +219,32 @@ function RegimenLineRow({
         </span>
       )}
     </div>
+  )
+}
+
+function CheckBox({
+  checked,
+  onToggle,
+  className,
+}: {
+  checked: boolean
+  onToggle?: () => void
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={checked}
+      aria-label="오더 체크박스"
+      className={cn(
+        "not-italic inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-ocs-muted text-[10px] font-bold leading-none",
+        checked ? "bg-ocs-highlight text-white" : "bg-transparent text-transparent",
+        className,
+      )}
+    >
+      ✓
+    </button>
   )
 }
 

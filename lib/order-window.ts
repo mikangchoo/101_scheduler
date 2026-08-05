@@ -12,14 +12,49 @@ export type OrderWindowRow =
   | { kind: "regimen"; key: string; line: RenderLine }
   | { kind: "med"; key: string; med: OrderMedWithMeta }
 
-/** 동의서 응답은 첫 항암 투약일에만 적용 (이후 날짜는 기본 스케줄) */
+/**
+ * 동의서 응답은 첫 항암 투약일에만 적용.
+ * 이후 날짜는 기본 시작시간 + 일자별 "항암제 당기기" 설정을 사용한다.
+ */
 export function effectiveSettings(
   settings: ScheduleSettings,
   day: number,
   firstDay: number,
 ): ScheduleSettings {
-  if (day === firstDay) return settings
-  return { ...DEFAULT_SCHEDULE_SETTINGS, consentReceived: true }
+  const pullForward = settings.pullForward ?? {}
+  if (day === firstDay) return { ...settings, pullForward }
+  return { ...DEFAULT_SCHEDULE_SETTINGS, consentReceived: true, pullForward }
+}
+
+/* ------------------------------------------------------------------ *
+ * 기울임체 레지멘 텍스트 정리
+ *  얼음 / EKG / cc/hr 등 "오더 실행 정보"는 오더 행의 수행시간 옆에만 표기
+ * ------------------------------------------------------------------ */
+
+const STRIP_PATTERNS: RegExp[] = [
+  /\s*\(\s*얼음[^)]*\)/g,
+  /\s*\[\s*얼음[^\]]*\]/g,
+  /\s*,?\s*얼음\s*(\/\s*)?/g,
+  /\s*\(\s*EKG[^)]*\)/g,
+  /\s*,?\s*EKG\s*(monitoring)?/g,
+  /\s*\d+(\.\d+)?\s*~?\s*\d*\s*cc\/hr/g,
+]
+
+function stripOrderInfo(text: string): string {
+  let out = text
+  for (const re of STRIP_PATTERNS) out = out.replace(re, "")
+  return out.replace(/\s{2,}/g, " ").replace(/\s+([,.)])/g, "$1").trimEnd()
+}
+
+function sanitizeLine(line: RenderLine): RenderLine {
+  if (line.segments) {
+    const segments = line.segments
+      .map((s) => ({ ...s, text: stripOrderInfo(s.text) }))
+      .filter((s) => s.text.trim().length > 0)
+    return { ...line, segments }
+  }
+  if (line.text) return { ...line, text: stripOrderInfo(line.text) }
+  return line
 }
 
 /** med id → 레지멘 라인 매칭 키워드 */
@@ -29,9 +64,16 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("levetiracetam"), keywords: ["Levetiracetam", "Keppra"] },
   { test: (id) => id === "ptcy", keywords: ["PTCy", "Cyclophosphamide"] },
   { test: (id) => id.startsWith("cyclophosphamide"), keywords: ["Cyclophosphamide"] },
-  { test: (id) => id.startsWith("granisetron"), keywords: ["Serotonin antagonist", "Granisetron", "Antiemetics"] },
+  { test: (id) => id.startsWith("palonosetron"), keywords: ["Palonosetron", "Antiemetics"] },
+  { test: (id) => id.startsWith("kanitron"), keywords: ["Ramosetron", "Antiemetics"] },
+  { test: (id) => id.startsWith("aprepitant"), keywords: ["aprepitant", "Aprepitant"] },
+  {
+    test: (id) => id.startsWith("granisetron"),
+    keywords: ["Serotonin antagonist", "Granisetron", "Antiemetics"],
+  },
   { test: (id) => id.startsWith("mesna"), keywords: ["Mesna"] },
-  { test: (id) => id.startsWith("hydration"), keywords: ["hydration", "Hydration", "cc/hr"] },
+  { test: (id) => id.startsWith("hyd"), keywords: ["hydration", "Hydration", "cc/hr"] },
+  { test: (id) => id.startsWith("hydration"), keywords: ["hydration", "Hydration"] },
   { test: (id) => id.startsWith("furosemide"), keywords: ["furosemide", "Furosemide"] },
   { test: (id) => id.startsWith("citopcin"), keywords: ["Ciprofloxacin"] },
   { test: (id) => id.startsWith("ursa"), keywords: ["UDCA"] },
@@ -40,6 +82,7 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("melphalan"), keywords: ["Melphalan"] },
   { test: (id) => id.startsWith("dexamethasone"), keywords: ["dexamethasone", "Dexamethasone"] },
   { test: (id) => id.startsWith("fludarabine"), keywords: ["Fludarabine"] },
+  { test: (id) => id.startsWith("mtx"), keywords: ["MTX", "Methotrexate"] },
   { test: (id) => id === "atg", keywords: ["ATG (Rabbit", "ATG"] },
   { test: (id) => id.startsWith("mpred"), keywords: ["Methylprednisolone", "M-pred"] },
   { test: (id) => id.startsWith("acetaminophen"), keywords: ["Acetaminophen"] },
@@ -87,8 +130,8 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
   const isFirstDay = day === firstDay
   const eff = effectiveSettings(settings, day, firstDay)
 
-  const lines = buildRegimenLines(regimenId, calc, doseOverrides)
-  const meds = getOrderMedsForDay(regimenId, day, eff)
+  const lines = buildRegimenLines(regimenId, calc, doseOverrides).map(sanitizeLine)
+  const meds = getOrderMedsForDay(regimenId, day, eff, days)
 
   // 라인별 오더 그룹
   const byIndex = new Map<number, OrderMedWithMeta[]>()
@@ -106,11 +149,8 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
 
   const rows: OrderWindowRow[] = []
   lines.forEach((line, i) => {
-    if ((line.kind ?? "normal") === "spacer") {
-      rows.push({ kind: "regimen", key: `l${i}`, line })
-      return
-    }
     rows.push({ kind: "regimen", key: `l${i}`, line })
+    if ((line.kind ?? "normal") === "spacer") return
     for (const med of byIndex.get(i) ?? []) {
       rows.push({ kind: "med", key: `m${i}-${med.id}`, med })
     }
@@ -123,7 +163,7 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
 }
 
 /* ------------------------------------------------------------------ *
- * PRN order (모든 일자 공통) — PRN_order.png 기준
+ * PRN order (모든 일자 공통)
  * ------------------------------------------------------------------ */
 
 export interface PrnOrder {
@@ -134,11 +174,15 @@ export interface PrnOrder {
 }
 
 export const PRN_ORDERS: PrnOrder[] = [
-  { id: "lasix", name: "Lasix inj 20mg (Furosemide)", detail: "20mg IV prn (I/O (+)1L 이상 시)", badge: "PRN" },
-  { id: "meckool", name: "Meckool syr (Magnesium hydroxide)", detail: "30mL PO prn (변비 시)", badge: "PRN" },
-  { id: "acetphen", name: "Acetphen tab 650mg (Acetaminophen)", detail: "650mg PO prn q6hr (fever/pain)", badge: "PRN" },
-  { id: "tridol", name: "Tridol inj 50mg (Tramadol)", detail: "50mg + N/S 100mL MIV prn (pain)", badge: "TIT" },
-  { id: "kanitron", name: "Kanitron tab 1mg (Ramosetron)", detail: "1mg PO prn (N/V)", badge: "PRN" },
-  { id: "chlorph-prn", name: "Chlorpheniramine inj 4mg", detail: "4mg IVS prn (skin rash / itching)", badge: "PRN" },
-  { id: "normal-saline", name: "0.9% N/S 100mL", detail: "IV side flushing prn", badge: "SUP" },
+  { id: "lasix", name: "Lasix inj 20mg (Furosemide)", detail: "20 mg [IV] prn", badge: "PRN" },
+  {
+    id: "chlorph-prn",
+    name: "Chlorpheniramine inj 4mg",
+    detail: "4 mg [IVS] prn",
+    badge: "PRN",
+  },
+  { id: "ns100", name: "0.9% N/S 100mL", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "ns50", name: "0.9% N/S 50mL", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "d5w50", name: "5% Dextrose 50mL", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "d5w20", name: "5% Dextrose 20cc amp", detail: "1 amp [IV] prn", badge: "SUP" },
 ]
