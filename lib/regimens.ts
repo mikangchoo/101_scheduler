@@ -108,4 +108,6 @@ export interface OrderMed {
   timeOptions?: string[]
   /** always-shown suffix, e.g. "F/ov1h", "얼음/ov1h" */
   suffix?: string
+  /** 레지멘 라인에서 추출한 총 용량 (예: 166.0 mg) */
+  doseText?: string
 }

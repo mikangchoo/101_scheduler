@@ -61,26 +61,32 @@ function sanitizeLine(line: RenderLine): RenderLine {
 const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("thiotepa"), keywords: ["Thiotepa"] },
   { test: (id) => id.startsWith("busulfan"), keywords: ["Busulfan"] },
-  { test: (id) => id.startsWith("levetiracetam"), keywords: ["Levetiracetam", "Keppra"] },
+  { test: (id) => id.startsWith("levetiracetam 500mg"), keywords: ["Levetiracetam", "Keppra", "다음날 500mg PO"] },
+  { test: (id) => id.startsWith("levetiracetam 1g"), keywords: ["Levetiracetam 1500mg", "Keppra"] },
   { test: (id) => id === "ptcy", keywords: ["PTCy", "Cyclophosphamide"] },
   { test: (id) => id.startsWith("cyclophosphamide"), keywords: ["Cyclophosphamide"] },
-  { test: (id) => id.startsWith("palonosetron"), keywords: ["Palonosetron", "Antiemetics"] },
-  { test: (id) => id.startsWith("kanitron"), keywords: ["Ramosetron", "Antiemetics"] },
-  { test: (id) => id.startsWith("aprepitant"), keywords: ["aprepitant", "Aprepitant"] },
+  { test: (id) => id.startsWith("palonosetron"), keywords: ["Palonosetron"]
+   },
+  { test: (id) => id.startsWith("granisetron-po"), keywords: ["Granisetron", "Serotonin antagnoist PO", "Serotonin antagonist PO"]},
+  { test: (id) => id.startsWith("aprepitant 125mg"), keywords: ["aprepitant 125mg", "Aprepitant 125mg"] },
+  { test: (id) => id.startsWith("aprepitant 80mg"), keywords: ["aprepitant 80mg", "Aprepitant 80mg"] },
   {
-    test: (id) => id.startsWith("granisetron"),
-    keywords: ["Serotonin antagonist", "Granisetron", "Antiemetics"],
+    test: (id) => id.startsWith("granisetron-iv"),
+    keywords: ["Granisetron", "Serotonin antagonist IV"],
   },
   { test: (id) => id.startsWith("mesna"), keywords: ["Mesna"] },
   { test: (id) => id.startsWith("hyd"), keywords: ["hydration", "Hydration", "cc/hr"] },
   { test: (id) => id.startsWith("hydration"), keywords: ["hydration", "Hydration"] },
-  { test: (id) => id.startsWith("furosemide"), keywords: ["furosemide", "Furosemide"] },
+  { test: (id) => id.startsWith("furosemide"), keywords: ["furosemide 20mg", "Furosemide 20mg"] },
+  { test: (id) => id.startsWith("furosemide 10mg"), keywords: ["furosemide 10mg", "Furosemide 10mg"] },
   { test: (id) => id.startsWith("citopcin"), keywords: ["Ciprofloxacin"] },
   { test: (id) => id.startsWith("ursa"), keywords: ["UDCA"] },
   { test: (id) => id.startsWith("mycamine"), keywords: ["Micafungin"] },
   { test: (id) => id.startsWith("zyprexa"), keywords: ["Olanzapine"] },
   { test: (id) => id.startsWith("melphalan"), keywords: ["Melphalan"] },
-  { test: (id) => id.startsWith("dexamethasone"), keywords: ["dexamethasone", "Dexamethasone"] },
+  { test: (id) => id.startsWith("dexamethasone 12mg"), keywords: ["dexamethasone 12mg", "Dexamethasone 12mg"] },
+  { test: (id) => id.startsWith("dexamethasone 10mg"), keywords: ["dexamethasone 10mg", "Dexamethasone 10mg"] },
+  { test: (id) => id.startsWith("dexamethasone 8mg"), keywords: ["dexamethasone 8mg", "Dexamethasone 8mg"] },
   { test: (id) => id.startsWith("fludarabine"), keywords: ["Fludarabine"] },
   { test: (id) => id.startsWith("mtx"), keywords: ["MTX", "Methotrexate"] },
   { test: (id) => id === "atg", keywords: ["ATG (Rabbit", "ATG"] },
@@ -90,11 +96,22 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("hydrocortisone"), keywords: ["Hydrocortisone"] },
   { test: (id) => id.startsWith("tacrolimus"), keywords: ["Tacrolimus"] },
   { test: (id) => id.startsWith("mmf"), keywords: ["MMF", "Mycophenolate"] },
+  { test: (id) => id.startsWith("stemcell"), keywords: ["Stem cell infusion"] },
 ]
 
 function lineText(line: RenderLine): string {
   if (line.segments) return line.segments.map((s) => s.text).join("")
   return line.text ?? ""
+}
+
+function extractDoseText(line: RenderLine): string | undefined {
+  if (!line.segments) return undefined
+  const red = line.segments
+    .filter((s) => s.red && /\d/.test(s.text))
+    .map((s) => s.text.trim())
+    .join(" ")
+  const m = red.match(/\d+(\.\d+)?\s*(mg|g|mg\/m2|g\/m2|mg\/m²)/i)
+  return m ? m[0] : undefined
 }
 
 function anchorIndex(medId: string, lines: RenderLine[]): number {
@@ -131,7 +148,14 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
   const eff = effectiveSettings(settings, day, firstDay)
 
   const lines = buildRegimenLines(regimenId, calc, doseOverrides).map(sanitizeLine)
-  const meds = getOrderMedsForDay(regimenId, day, eff, days)
+  const rawMeds = getOrderMedsForDay(regimenId, day, eff, days)
+
+  // 레지멘 라인에서 총 용량 추출 후 OrderMed에 주입
+  const meds = rawMeds.map((med) => {
+    const idx = anchorIndex(med.id, lines)
+    const doseText = idx >= 0 ? extractDoseText(lines[idx]) : undefined
+    return { ...med, doseText }
+  })
 
   // 라인별 오더 그룹
   const byIndex = new Map<number, OrderMedWithMeta[]>()
@@ -181,8 +205,8 @@ export const PRN_ORDERS: PrnOrder[] = [
     detail: "4 mg [IVS] prn",
     badge: "PRN",
   },
-  { id: "ns100", name: "0.9% N/S 100mL", detail: "1 bag [IV] prn", badge: "SUP" },
-  { id: "ns50", name: "0.9% N/S 50mL", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "ns100", name: "0.9% NS 100ml", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "ns50", name: "0.9% NS 50ml", detail: "1 bag [IV] prn", badge: "SUP" },
   { id: "d5w50", name: "5% Dextrose 50mL", detail: "1 bag [IV] prn", badge: "SUP" },
   { id: "d5w20", name: "5% Dextrose 20cc amp", detail: "1 amp [IV] prn", badge: "SUP" },
 ]

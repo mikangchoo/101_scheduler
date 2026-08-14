@@ -28,6 +28,7 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
         bundled && "relative",
       )}
     >
+      <div className="realaive">
       {bundled && <BundleBracket />}
 
       <div className={cn("grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5", bundled && "pl-6")}>
@@ -36,6 +37,9 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
             {med.lastOralDose && <HoldIcon />}
             {med.sup && <Badge kind="SUP" />}
             <span className="truncate">{med.name}</span>
+            {med.doseText && (
+              <span className="whitespace-nowrap text-ocs-highlight">{med.doseText}</span>
+            )}
           </p>
           <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
           {med.note && <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>}
@@ -80,12 +84,17 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
         </div>
       )}
 
-      {/* 경구약 첫 투약 — +1 오더 (스케줄링 없음) */}
-      {med.firstOralDose && (
+      </div>
+
+      {/* 첫 투약 — +1 오더 (스케줄링 없음) */}
+      {med.firstDose && (
         <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-ocs-border/60 px-3 py-1.5">
           <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
             <PlusOneIcon />
             <span className="truncate">{med.name}</span>
+            {med.doseText && (
+              <span className="whitespace-nowrap text-ocs-highlight">{med.doseText}</span>
+            )}
           </p>
           <span aria-hidden="true" />
         </div>

@@ -42,9 +42,9 @@ export function StepHeader({ current }: { current: number }) {
       <div className="mx-auto flex max-w-5xl flex-col gap-3 px-4 py-4 sm:px-6">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <span className="text-sm font-bold">Rx</span>
+            <span className="text-sm font-bold">101</span>
           </div>
-          <h1 className="text-balance text-lg font-semibold text-foreground">항암 레지멘 스케줄러</h1>
+          <h1 className="text-balance text-lg font-semibold text-foreground"> 전처치 항암 레지멘・스케줄러</h1>
         </div>
         <ol className="flex flex-wrap items-center gap-x-2 gap-y-2">
           {STEPS.map((s, i) => {

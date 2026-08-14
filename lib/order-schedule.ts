@@ -80,8 +80,12 @@ interface MedDef {
   note?: string
   /** 경구약 — 첫 투약 +1 / 마지막 투약 조제유보 아이콘 대상 */
   oral?: boolean
+  /** IV/IM 등 비경구약도 첫 투약일에 +1 행 생성 (Kanitron 3mg amp 등) */
+  firstDoseExtra?: boolean
   /** 컨디셔닝 이후로도 지속 투약 (마지막 투약 아이콘 생성 X) */
   continuous?: boolean
+  /** +1 오더/조제유보 생성 제외 (Zyprexa 등) */
+  noExtraOrder?: boolean
   /** 투약 일자 */
   days: number[]
   rule: TimeRule
@@ -94,7 +98,7 @@ interface MedDef {
  * ------------------------------------------------------------------ */
 
 const NS50 = "Normal saline 50mL bag 중외      1 bag  [IV]  <Mix>  x1"
-const NS100 = "Normal saline 100mL btl 대한      1 btl  [IV]  <Mix>  x1"
+const NS100 = "Normal saline 100mL bag 대한      1 bag  [IV]  <Mix>  x1"
 const NS500 = "Normal saline 500mL btl 대한      1 btl  [IV]  <Mix>  x1"
 const D5W100 = "Dextrose 5% 100mL bag 중외      1 bag  [IV]  <Mix>  x1"
 
@@ -131,11 +135,12 @@ export function getMesnaTimes(ctxStartMin: number): string[] {
 const THIOBUCY_MEDS: MedDef[] = [
   {
     id: "palonosetron",
-    name: "Aloxi 0.25mg/5ml inj(Palonosetron)      1 via(5mL)  [IV]  <Mix>  x1",
+    name: "Aloxi 0.25mg/5ml inj(Palonosetron)      1 via(5mL)  [IV]    x1",
     detail: "0.25 mg [IV] qd",
     solvent: NS50,
     days: [-8],
     sort: 4,
+    firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
   },
   {
@@ -144,7 +149,6 @@ const THIOBUCY_MEDS: MedDef[] = [
     detail: "[IV] <Mix> x1 · miv over 60min",
     solvent: NS500,
     suffix: "F/ov1h",
-    timeNote: "0.22μm filter",
     days: [-8, -7, -6],
     sort: 10,
     rule: {
@@ -161,12 +165,20 @@ const THIOBUCY_MEDS: MedDef[] = [
     suffix: "ov3h",
     days: [-5, -4],
     sort: 10,
-    note: "Sz prophylaxis: Levetiracetam 1500mg po loading 3–4hrs before (D-5), 이후 500mg bid",
     rule: { type: "chemo", durationMin: 180 },
   },
+    {
+    id: "levetiracetam 1g",
+    name: "Levetiracetam 1g tab (Keppra)",
+    detail: "[P.O] · Sz prophylaxis",
+    oral: true,
+    days: [-5],
+    sort: 60,
+    rule: { type: "oral", freq: "qd" },
+  },
   {
-    id: "levetiracetam",
-    name: "Levetiracetam tab (Keppra)",
+    id: "levetiracetam 500mg",
+    name: "Levetiracetam 500mg tab (Keppra)",
     detail: "[P.O] · Sz prophylaxis",
     oral: true,
     days: [-5, -4, -3],
@@ -185,18 +197,59 @@ const THIOBUCY_MEDS: MedDef[] = [
     rule: { type: "chemo", durationMin: 60 },
   },
   {
-    id: "granisetron-ctx",
-    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]  <Mix>  x1",
+    id: "granisetron-iv",
+    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
-    days: [-3, -2],
+    days: [-5, -4, -3],
     sort: 5,
+    firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
+  },
+    {
+    id: "aprepitant 125mg",
+    name: "Emend 125mg cap(Aprepitant)",
+    detail: "1 cap [P.O] daily ut dict",
+    oral: true,
+    days: [-3],
+    sort: 5,
+    firstDoseExtra: true,
+    rule: { type: "pre-chemo", offsetMin: -60 },
+  },
+      {
+    id: "aprepitant 80mg",
+    name: "Emend 80mg cap(Aprepitant)",
+    detail: "1 cap [P.O] daily ut dict",
+    oral: true,
+    days: [-2, -1],
+    sort: 5,
+    firstDoseExtra: true,
+    rule: { type: "fixed", times: ["08:00"] },
+  },
+    {
+    id: "dexamethasone 12mg",
+    name: "Dexamethasone disodium phosphate 12mg",
+    detail: "<MIV> · [IVS]",
+    solvent: NS50,
+    suffix: "차",
+    days: [-3],
+    sort: 6,
+    rule: { type: "pre-chemo", offsetMin: -30 },
+  },
+  {
+    id: "dexamethasone 8mg",
+    name: "Dexamethasone disodium phosphate 5mg/1ml 8mg",
+    detail: "<MIV> · [IVS]",
+    solvent: NS50,
+    suffix: "차",
+    days: [-2, -1],
+    sort: 6,
+    rule: { type: "pre-chemo", offsetMin: -30 },
   },
   {
     id: "mesna",
-    name: "Mesna inj 1000mg",
-    detail: "[MIV] · q6hr",
+    name: "Uromitexan 400mg/4ml inj(Mesna) 1000mg",
+    detail: "<MIV> · q6hr",
     solvent: NS50,
     note: "Cyclophosphamide 시작 30분 전 → q6hr (익일분 포함)",
     days: [-3, -2],
@@ -204,27 +257,18 @@ const THIOBUCY_MEDS: MedDef[] = [
     rule: { type: "mesna", ref: "cyclophosphamide" },
   },
   {
-    id: "kanitron-po",
-    name: "Kanitron tab 1mg (Ramosetron)",
-    detail: "1 mg [P.O] qd",
-    oral: true,
-    days: [-8, -7, -6, -5, -4, -3, -2],
-    sort: 6,
-    rule: { type: "fixed", times: ["08:00"] },
-  },
-  {
     id: "hydration",
     name: "Dextrose 5% Na K2 1L (NaK2V)",
     detail: "[IV] D5WNa77K20 · 3L/m²/day",
     sup: true,
-    timeNote: "240 cc/hr",
+    timeNote: "",
     days: [-3, -2, -1, 0],
     sort: 80,
     rule: { type: "hydration", rateCcHr: 125 },
   },
   {
-    id: "furosemide",
-    name: "Furosemide inj 10mg",
+    id: "furosemide 10mg",
+    name: "Lasix inj 20mg (Furosemide) 10mg",
     detail: "[IV] q6h PRN",
     note: "if 6hr u/o < 1L or 150ml/hr",
     days: [-3, -2, -1, 0],
@@ -266,9 +310,26 @@ const THIOBUCY_MEDS: MedDef[] = [
     name: "Zyprexa 10mg tab (Olanzapine)",
     detail: "1 tab [P.O] daily hs [D]",
     oral: true,
+    noExtraOrder: true,
     days: [-8, -7, -6],
     sort: 90,
     rule: { type: "fixed", times: ["21:00"] },
+  },
+  {
+    id: "stemcell-auto",
+    name: "자가말초혈액조혈모세포 주입술",
+    detail: "[IV] x1",
+    days: [0],
+    sort: 0,
+    rule: { type: "fixed", times: ["14:00"] },
+  },
+  {
+    id: "stemcell-premed",
+    name: "Chlorepheniramine meleate 4mg/2ml inj유한",
+    detail: "1 amp(2 mL) [IV] x1",
+    days: [0],
+    sort: 1,
+    rule: { type: "fixed", times: ["14:00"] },
   },
 ]
 
@@ -278,65 +339,50 @@ const THIOBUCY_MEDS: MedDef[] = [
 const HDMEL_MEDS: MedDef[] = [
   {
     id: "melphalan",
-    name: "Alkeran inj (Melphalan)",
-    detail: "[MIV] · miv over 30min",
+    name: "Megval 50mg inj (Melphalan)",
+    detail: "<MIV> · miv over 30min",
     solvent: NS500,
-    suffix: "ov30m",
-    timeNote: "얼음/차광",
+    suffix: "얼차ov30m",
     days: [-3, -2],
     sort: 10,
     rule: { type: "chemo", durationMin: 30 },
   },
   {
-    id: "granisetron-mel",
-    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]  <Mix>  x1",
+    id: "granisetron-iv",
+    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
     days: [-3, -2],
     sort: 5,
+    firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
   },
   {
-    id: "dexamethasone-mel",
-    name: "Dexamethasone inj 10mg",
-    detail: "[IVS] · premed",
+    id: "dexamethasone 10mg",
+    name: "Dexamethasone disodium phosphate 10mg",
+    detail: "<MIV> · [IVS]",
+    solvent: NS50,
+    suffix: "차",
     days: [-3, -2],
     sort: 6,
     rule: { type: "pre-chemo", offsetMin: -30 },
   },
   {
-    id: "aprepitant-125",
-    name: "Emend cap 125mg (Aprepitant)",
-    detail: "125 mg [P.O] x1",
-    oral: true,
-    days: [-3],
-    sort: 7,
-    rule: { type: "pre-chemo", offsetMin: -60 },
-  },
-  {
-    id: "aprepitant-80",
-    name: "Emend cap 80mg (Aprepitant)",
-    detail: "80 mg [P.O] qd",
-    oral: true,
-    days: [-2, -1],
-    sort: 8,
-    rule: { type: "fixed", times: ["08:00"] },
-  },
-  {
     id: "hyd-pre-mel",
-    name: "Dextrose 5% Na K2 1L (NaK2V)",
-    detail: "[IV] hydration",
+    name: "Dextrose 5% Na K2 1L bag(D5WNa77K20)",
+    detail: "[IV] 250ch MEL -6hr ~ +12hr, in the meantime 75ch",
     sup: true,
-    timeNote: "250 cc/hr → +12hr 75 cc/hr",
-    note: "Melphalan 기준 -6시간부터 hydration 시작",
+    timeNote: "250 cc/hr",
+    note: "",
     days: [-3, -2],
     sort: 80,
     rule: { type: "relative", ref: "melphalan", offsetMin: -360, repeatEveryMin: 240, count: 3 },
   },
   {
     id: "furosemide-mel",
-    name: "Furosemide inj 20mg",
+    name: "Lasix 20mg/2ml inj(Furosemide)",
     detail: "[IVS] · +1hr after Mel",
+    suffix: "MEL+1h",
     days: [-3, -2],
     sort: 30,
     rule: { type: "relative", ref: "melphalan", offsetMin: 60 },
@@ -360,6 +406,31 @@ const HDMEL_MEDS: MedDef[] = [
     days: [-3, -2, -1, 0],
     sort: 75,
     rule: { type: "mycamine" },
+  },
+  {
+    id: "stemcell-auto",
+    name: "자가말초혈액조혈모세포 주입술",
+    detail: "[IV] x1",
+    days: [0],
+    sort: 0,
+    rule: { type: "fixed", times: ["14:00"] },
+  },
+  {
+    id: "stemcell-premed",
+    name: "Chlorepheniramine meleate 4mg/2ml inj유한",
+    detail: "1 amp(2 mL) [IV] x1",
+    days: [0],
+    sort: 1,
+    rule: { type: "fixed", times: ["14:00"] },
+  },
+    {
+    id: "granisetron-po",
+    name: "Kanitron tab 1mg (Granisetron)",
+    detail: "1 mg [P.O] qd",
+    oral: true,
+    days: [-1, 0],
+    sort: 6,
+    rule: { type: "fixed", times: ["08:00"] },
   },
 ]
 
@@ -400,11 +471,12 @@ const BUFLUBATG_MEDS: MedDef[] = [
   },
   {
     id: "granisetron-batg",
-    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]  <Mix>  x1",
+    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
     days: [-6, -5, -4, -3],
     sort: 5,
+    firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
   },
   {
@@ -524,6 +596,22 @@ const BUFLUBATG_MEDS: MedDef[] = [
     sort: 75,
     rule: { type: "mycamine" },
   },
+  {
+    id: "stemcell-allo",
+    name: "동종말초혈액조혈모세포 주입술",
+    detail: "[IV] x1",
+    days: [0],
+    sort: 0,
+    rule: { type: "fixed", times: ["17:00"] },
+  },
+  {
+    id: "stemcell-premed-allo",
+    name: "Chlorepheniramine meleate 4mg/2ml inj유한",
+    detail: "1 amp(2 mL) [IV] x1",
+    days: [0],
+    sort: 1,
+    rule: { type: "fixed", times: ["17:00"] },
+  },
 ]
 
 /* ============================================================ *
@@ -562,11 +650,12 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
   },
   {
     id: "granisetron-ptcy",
-    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]  <Mix>  x1",
+    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
     days: [-6, -5, -4, -3, -2],
     sort: 5,
+    firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
   },
   {
@@ -583,17 +672,18 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
   },
   {
     id: "granisetron-ptcy-post",
-    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]  <Mix>  x1",
+    name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
     days: [3, 4],
     sort: 5,
+    firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
   },
   {
     id: "mesna-ptcy",
-    name: "Mesna inj 1000mg",
-    detail: "[MIV] · q6hr",
+    name: "MUromitexan 400mg/4ml inj(Mesna) 1000mg",
+    detail: "<MIV> · q6hr",
     solvent: NS50,
     note: "PTCy 시작 30분 전 → q6hr (익일분 포함)",
     days: [3, 4],
@@ -670,6 +760,22 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     sort: 75,
     rule: { type: "mycamine" },
   },
+  {
+    id: "stemcell-allo",
+    name: "동종말초혈액조혈모세포 주입술",
+    detail: "[IV] x1",
+    days: [0],
+    sort: 0,
+    rule: { type: "fixed", times: ["17:00"] },
+  },
+  {
+    id: "stemcell-premed-allo",
+    name: "Chlorepheniramine meleate 4mg/2ml inj유한",
+    detail: "1 amp(2 mL) [IV] x1",
+    days: [0],
+    sort: 1,
+    rule: { type: "fixed", times: ["17:00"] },
+  },
 ]
 
 /* ============================================================ *
@@ -699,8 +805,8 @@ export interface OrderMedWithMeta extends OrderMed {
   timeNote?: string
   /** (단독) 표기 */
   solo?: boolean
-  /** 경구약 첫 투약 → +1 오더 행 생성 */
-  firstOralDose?: boolean
+  /** 첫 투약 → +1 오더 행 생성 (경구약 또는 firstDoseExtra) */
+  firstDose?: boolean
   /** 경구약 마지막 투약 → 조제유보 아이콘 */
   lastOralDose?: boolean
 }
@@ -741,7 +847,8 @@ export function getChemoStartMinutesForDay(
     if (!regimenId || chemoDefsForDay(regimenId, d).length === 0) continue
     if (isPullForward(settings, d)) cursor -= getPullLimitMin(regimenId, d)
   }
-  return cursor
+  // 첫 항암 투약일은 선택한 시간 그대로, 이후 날짜는 최소 11:00
+  return day === firstDay ? cursor : Math.max(11 * 60, cursor)
 }
 
 function scheduleChemo(
@@ -866,9 +973,16 @@ export function getOrderMedsForDay(
         solvent: m.solvent,
         timeNote: m.timeNote,
         solo: m.rule.type === "antiemetic-iv",
-        firstOralDose: m.oral === true && day === sortedDays[0],
+        firstDose:
+          !m.noExtraOrder &&
+          ((m.oral === true && day === sortedDays[0]) ||
+           (m.firstDoseExtra === true && day === sortedDays[0]) ||
+           (m.rule.type === "antiemetic-iv" && day === sortedDays[0])),
         lastOralDose:
-          m.oral === true && m.continuous !== true && day === sortedDays[sortedDays.length - 1],
+          !m.noExtraOrder &&
+          (m.oral === true || m.firstDoseExtra === true || m.rule.type === "antiemetic-iv") &&
+          m.continuous !== true &&
+          day === sortedDays[sortedDays.length - 1],
         scheduleKind: displayKind(m),
         defaultTimes: resolveTimes(m, anchors, firstStart, settings),
         timeOptions: m.rule.type === "select" ? m.rule.options : undefined,

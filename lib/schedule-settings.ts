@@ -7,7 +7,7 @@ export type NoConsentStart = "13:00" | "16:30" | "17:30"
 export const NO_CONSENT_OPTIONS: { value: NoConsentStart; label: string }[] = [
   { value: "13:00", label: "1:00 P.M." },
   { value: "16:30", label: "4:30 P.M." },
-  { value: "17:30", label: "5:30 P.M. (5P30)" },
+  { value: "17:30", label: "5:30 P.M." },
 ]
 
 /** 항암제 당기기 한도 (분) */

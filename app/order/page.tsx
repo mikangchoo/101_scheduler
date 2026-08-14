@@ -9,6 +9,7 @@ import { useFlow } from "@/contexts/flow-context"
 import { findRegimen } from "@/lib/regimens"
 import { computeCalc, isValidPatient } from "@/lib/calc"
 import { formatDay, getOrderDaysForRegimen, getPullLimitMin } from "@/lib/order-schedule"
+import type { OrderMedWithMeta } from "@/lib/order-schedule"
 import { buildOrderWindow, effectiveSettings, PRN_ORDERS } from "@/lib/order-window"
 import { describeStart, NO_CONSENT_OPTIONS, type NoConsentStart } from "@/lib/schedule-settings"
 import type { RenderLine } from "@/lib/regimen-render"
@@ -70,6 +71,11 @@ export default function OrderPage() {
       pullForward: { ...(s.pullForward ?? {}), [day]: value },
     }))
   }
+
+  const prnTimes = useMemo(() => {
+    if (!window_) return {}
+    return getPrnTimes(day, window_.meds, times)
+  }, [day, window_, times])
 
   if (!hydrated || !regimen || !isValidPatient(patient) || !window_) return null
 
@@ -216,7 +222,9 @@ export default function OrderPage() {
                 </p>
                 <p className="truncate text-[11px] text-ocs-muted">{o.detail}</p>
               </div>
-              <span className="whitespace-nowrap font-mono text-[13px] text-ocs-muted">PRN/</span>
+              <span className="whitespace-nowrap font-mono text-[13px] text-ocs-muted">
+                {prnTimes[o.id]?.length ? prnTimes[o.id].map((t) => `${t}/`).join(" ") : "PRN/"}
+              </span>
             </div>
           ))}
         </div>
@@ -277,6 +285,37 @@ function RegimenTextRow({ line }: { line: RenderLine }) {
       )}
     </div>
   )
+}
+
+function getPrnTimes(
+  day: number,
+  meds: OrderMedWithMeta[],
+  times: TimesState,
+): Record<string, string[]> {
+  const nsTimes: string[] = []
+  const d5wTimes: string[] = []
+  let d5wCount = 0
+
+  for (const med of meds) {
+    if (med.scheduleKind !== "chemo") continue
+    const medTimes = times[`${day}:${med.id}`] ?? med.defaultTimes
+    const solvent = med.solvent?.toLowerCase() ?? ""
+    if (solvent.includes("dextrose") || solvent.includes("d5w")) {
+      d5wTimes.push(...medTimes)
+      d5wCount += 1
+    } else {
+      nsTimes.push(...medTimes)
+    }
+  }
+
+  return {
+    ns100: ["00:00", "00:00"],
+    ns50: ["00:00", "00:00", ...nsTimes],
+    d5w50: [...d5wTimes],
+    d5w20: Array.from({ length: d5wCount * 2 }, () => "00:00"),
+    lasix: [],
+    "chlorph-prn": [],
+  }
 }
 
 function ChoiceButton({
