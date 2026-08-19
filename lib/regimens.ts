@@ -110,4 +110,10 @@ export interface OrderMed {
   suffix?: string
   /** 레지멘 라인에서 추출한 총 용량 (예: 166.0 mg) */
   doseText?: string
+  /** 레지멘에서 계산된 용매 용량 (예: 300 mL) */
+  solventDoseText?: string
+  /** 수행시간 첫 칸에 표기할 주입 속도 (예: 240cc/hr) */
+  rateNote?: string
+  /** 마지막 투약 시간 뒤 (end) 표기 */
+  endMark?: boolean
 }

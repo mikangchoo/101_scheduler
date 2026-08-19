@@ -25,75 +25,94 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
       className={cn(
         "border-l-2 border-ocs-highlight",
         alt ? "bg-ocs-row-alt" : "bg-ocs-row",
-        bundled && "relative",
       )}
     >
-      <div className="realaive">
-      {bundled && <BundleBracket />}
+      {/* 본 오더 + 용매 줄만 묶음 대괄호로 감싼다 (+1 행은 제외) */}
+      <div className={cn(bundled && "relative")}>
+        {bundled && <BundleBracket />}
 
-      <div className={cn("grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5", bundled && "pl-6")}>
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
-            {med.lastOralDose && <HoldIcon />}
-            {med.sup && <Badge kind="SUP" />}
-            <span className="truncate">{med.name}</span>
-            {med.doseText && (
-              <span className="whitespace-nowrap text-ocs-highlight">{med.doseText}</span>
-            )}
-          </p>
-          <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
-          {med.note && <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>}
-        </div>
-
-        <div className="shrink-0 text-right">
-          {med.scheduleKind === "thiotepa" ? (
-            <SelectTime med={med} times={times} onChange={onChange} />
-          ) : med.scheduleKind === "citopcin" ? (
-            <EditableTime
-              times={times}
-              options={[
-                { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
-                { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
-              ]}
-            />
-          ) : med.scheduleKind === "ursa" ? (
-            <EditableTime
-              times={times}
-              options={[
-                { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
-                { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
-              ]}
-            />
-          ) : (
-            <FixedTime
-              times={times}
-              suffix={med.suffix}
-              timeNote={med.timeNote}
-              solo={med.solo}
-              highlight={med.scheduleKind === "chemo"}
-            />
+        <div
+          className={cn(
+            "grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5",
+            bundled && "pl-6",
           )}
+        >
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
+              {med.lastOralDose && <HoldIcon />}
+              {med.sup && <Badge kind="SUP" />}
+              <span className="truncate">{med.name}</span>
+              {med.doseText && (
+                <span className="whitespace-nowrap text-red-500 print:text-red-600">
+                  {med.doseText}
+                </span>
+              )}
+            </p>
+            <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
+            {med.note && (
+              <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>
+            )}
+          </div>
+
+          <div className="shrink-0 text-right">
+            {med.scheduleKind === "thiotepa" ? (
+              <SelectTime med={med} times={times} onChange={onChange} />
+            ) : med.scheduleKind === "citopcin" ? (
+              <EditableTime
+                times={times}
+                options={[
+                  { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
+                  { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
+                ]}
+              />
+            ) : med.scheduleKind === "ursa" ? (
+              <EditableTime
+                times={times}
+                options={[
+                  { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
+                  { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
+                ]}
+              />
+            ) : (
+              <FixedTime
+                times={times}
+                suffix={med.suffix}
+                timeNote={med.timeNote}
+                solo={med.solo}
+                highlight={med.scheduleKind === "chemo"}
+                rateNote={med.rateNote}
+                endMark={med.endMark}
+              />
+            )}
+          </div>
         </div>
+
+        {/* 용매 줄 — 수행시간 없음 */}
+        {med.solvent && (
+          <div className="grid grid-cols-[1fr_auto] items-start gap-4 px-3 pb-1.5 pl-6">
+            <p className="truncate text-[13px] not-italic text-ocs-text">
+              {med.solvent}
+              {med.solventDoseText && (
+                <span className="ml-1 whitespace-nowrap text-red-500 print:text-red-600">
+                  {med.solventDoseText}
+                </span>
+              )}
+            </p>
+            <span aria-hidden="true" />
+          </div>
+        )}
       </div>
 
-      {/* 용매 줄 — 수행시간 없음 */}
-      {med.solvent && (
-        <div className="grid grid-cols-[1fr_auto] items-start gap-4 px-3 pb-1.5 pl-6">
-          <p className="truncate text-[13px] not-italic text-ocs-text">{med.solvent}</p>
-          <span aria-hidden="true" />
-        </div>
-      )}
-
-      </div>
-
-      {/* 첫 투약 — +1 오더 (스케줄링 없음) */}
+      {/* 첫 투약 — +1 오더 (스케줄링 없음, 묶음 밖) */}
       {med.firstDose && (
         <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-ocs-border/60 px-3 py-1.5">
           <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
             <PlusOneIcon />
             <span className="truncate">{med.name}</span>
             {med.doseText && (
-              <span className="whitespace-nowrap text-ocs-highlight">{med.doseText}</span>
+              <span className="whitespace-nowrap text-red-500 print:text-red-600">
+                {med.doseText}
+              </span>
             )}
           </p>
           <span aria-hidden="true" />
@@ -156,17 +175,28 @@ function FixedTime({
   timeNote,
   solo,
   highlight,
+  rateNote,
+  endMark,
 }: {
   times: string[]
   suffix?: string
   timeNote?: string
   solo?: boolean
   highlight?: boolean
+  rateNote?: string
+  endMark?: boolean
 }) {
   return (
     <span className="whitespace-nowrap font-mono text-[13px] not-italic">
       <span className={highlight ? "text-ocs-highlight" : "text-ocs-time"}>
-        {times.map((t) => `${t}/`).join(" ")}
+        {times.map((t, i) => (
+          <span key={`${t}-${i}`}>
+            {t}
+            {i === 0 && rateNote && <span className="text-white">({rateNote})</span>}
+            {"/ "}
+          </span>
+        ))}
+        {endMark && <span className="ml-1 text-ocs-text">(end)</span>}
       </span>
       {solo && <span className="ml-1 text-ocs-muted">(단독)</span>}
       {suffix && <span className="ml-1 text-ocs-highlight">({suffix})</span>}
@@ -203,7 +233,9 @@ function SelectTime({
         <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ocs-muted" />
       </div>
       {med.suffix && (
-        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight">({med.suffix})/</span>
+        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight">
+          ({med.suffix})/
+        </span>
       )}
       {med.timeNote && (
         <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight/80">

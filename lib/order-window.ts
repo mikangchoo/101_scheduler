@@ -1,7 +1,12 @@
 import type { CalcResult } from "@/lib/calc"
 import type { DoseOverrides } from "@/lib/dose-overrides"
 import { buildRegimenLines, type RenderLine } from "@/lib/regimen-render"
-import { getOrderMedsForDay, type OrderMedWithMeta } from "@/lib/order-schedule"
+import {
+  getOrderMedsForDay,
+  getChemoStartMinutesForDay,
+  getHydrationTimes,
+  type OrderMedWithMeta,
+} from "@/lib/order-schedule"
 import { DEFAULT_SCHEDULE_SETTINGS, type ScheduleSettings } from "@/lib/schedule-settings"
 
 /**
@@ -22,8 +27,10 @@ export function effectiveSettings(
   firstDay: number,
 ): ScheduleSettings {
   const pullForward = settings.pullForward ?? {}
-  if (day === firstDay) return { ...settings, pullForward }
-  return { ...DEFAULT_SCHEDULE_SETTINGS, consentReceived: true, pullForward }
+  void day
+  void firstDay
+  // 첫날 이후에도 동의서/시작시간 선택을 그대로 유지 → 전일 투약시간과 연동
+  return { ...settings, pullForward }
 }
 
 /* ------------------------------------------------------------------ *
@@ -77,8 +84,9 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("mesna"), keywords: ["Mesna"] },
   { test: (id) => id.startsWith("hyd"), keywords: ["hydration", "Hydration", "cc/hr"] },
   { test: (id) => id.startsWith("hydration"), keywords: ["hydration", "Hydration"] },
-  { test: (id) => id.startsWith("furosemide"), keywords: ["furosemide 20mg", "Furosemide 20mg"] },
+  { test: (id) => id.startsWith("furosemide 20mg"), keywords: ["furosemide 20mg", "Furosemide 20mg"] },
   { test: (id) => id.startsWith("furosemide 10mg"), keywords: ["furosemide 10mg", "Furosemide 10mg"] },
+  { test: (id) => id === "urine-output", keywords: ["check urine output", "Check urine output"] },
   { test: (id) => id.startsWith("citopcin"), keywords: ["Ciprofloxacin"] },
   { test: (id) => id.startsWith("ursa"), keywords: ["UDCA"] },
   { test: (id) => id.startsWith("mycamine"), keywords: ["Micafungin"] },
@@ -112,6 +120,28 @@ function extractDoseText(line: RenderLine): string | undefined {
     .join(" ")
   const m = red.match(/\d+(\.\d+)?\s*(mg|g|mg\/m2|g\/m2|mg\/m²)/i)
   return m ? m[0] : undefined
+}
+
+/** 항암제 라인 및 바로 아래 용매 라인에서 계산된 용매 용량(예: 300 mL) 추출 */
+function extractSolventDoseText(lines: RenderLine[], idx: number): string | undefined {
+  for (let i = idx; i <= idx + 3 && i < lines.length; i++) {
+    const line = lines[i]
+    if (!line) continue
+    const red = (line.segments ?? [])
+      .filter((s) => s.red)
+      .map((s) => s.text)
+      .join(" ")
+    const hit = red.match(/\d+(\.\d+)?\s*(mL|ml|cc)/)
+    if (hit) return hit[0]
+  }
+  return undefined
+}
+
+/** 레지멘 annotation(`240 cc/hr`)에서 hydration 속도 추출 */
+function extractRateNote(line: RenderLine | undefined): string | undefined {
+  const src = `${line?.annotation ?? ""} ${line ? lineText(line) : ""}`
+  const hit = src.match(/(\d+(\.\d+)?)\s*cc\/hr/i)
+  return hit ? `${hit[1]}cc/hr` : undefined
 }
 
 function anchorIndex(medId: string, lines: RenderLine[]): number {
@@ -153,9 +183,17 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
   // 레지멘 라인에서 총 용량 추출 후 OrderMed에 주입
   const meds = rawMeds.map((med) => {
     const idx = anchorIndex(med.id, lines)
-    const doseText = idx >= 0 ? extractDoseText(lines[idx]) : undefined
-    return { ...med, doseText }
+    const line = idx >= 0 ? lines[idx] : undefined
+    const doseText = line ? extractDoseText(line) : undefined
+    const solventDoseText = idx >= 0 && med.solvent ? extractSolventDoseText(lines, idx) : undefined
+    const rateNote = med.id.startsWith("hyd") ? extractRateNote(line) : undefined
+    const defaultTimes =
+      rateNote && med.id.startsWith("hyd")
+        ? getHydrationTimes(Number.parseFloat(rateNote))
+        : med.defaultTimes
+    return { ...med, doseText, solventDoseText, rateNote, defaultTimes }
   })
+
 
   // 라인별 오더 그룹
   const byIndex = new Map<number, OrderMedWithMeta[]>()

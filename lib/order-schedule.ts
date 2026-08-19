@@ -86,6 +86,8 @@ interface MedDef {
   continuous?: boolean
   /** +1 오더/조제유보 생성 제외 (Zyprexa 등) */
   noExtraOrder?: boolean
+  /** 마지막 투약일 조제유보 예외 (Keppra 500mg) + 마지막 시간에 (end) 표기 */
+  noHoldLast?: boolean
   /** 투약 일자 */
   days: number[]
   rule: TimeRule
@@ -99,8 +101,10 @@ interface MedDef {
 
 const NS50 = "Normal saline 50mL bag 중외      1 bag  [IV]  <Mix>  x1"
 const NS100 = "Normal saline 100mL bag 대한      1 bag  [IV]  <Mix>  x1"
+const NS250 = "Normal saline 250mL btl 중외      1 btl  [IV]  <Mix>  x1"
 const NS500 = "Normal saline 500mL btl 대한      1 btl  [IV]  <Mix>  x1"
 const D5W100 = "Dextrose 5% 100mL bag 중외      1 bag  [IV]  <Mix>  x1"
+const D5W200 = "Dextrose 5% 200mL bag 중외      1 bag  [IV]  <Mix>  x1"
 
 /* ------------------------------------------------------------------ *
  * Time helpers
@@ -121,9 +125,15 @@ export function getHydrationTimes(rateCcHr: number): string[] {
 /** Mesna q6hr — CTX 시작 30분 전부터 6시간 간격 4회 (24시 넘으면 익일 표기) */
 export function getMesnaTimes(ctxStartMin: number): string[] {
   const first = ctxStartMin - 30
+  /** 목표 격자: 11:00 / 17:00 / 23:00 / 05:00(익일) */
+  const grid = [11 * 60, 17 * 60, 23 * 60, 29 * 60]
   const out: string[] = []
   for (let i = 0; i < 4; i++) {
-    const t = first + i * 360
+    let t = first + i * 360
+    if (i > 0) {
+      const g = grid[i]
+      if (g != null && Math.abs(g - t) <= 30) t = g
+    }
     out.push(t >= 1440 ? `${fromMinutes(t)}(익일)` : fromMinutes(t))
   }
   return out
@@ -181,6 +191,7 @@ const THIOBUCY_MEDS: MedDef[] = [
     name: "Levetiracetam 500mg tab (Keppra)",
     detail: "[P.O] · Sz prophylaxis",
     oral: true,
+    noHoldLast: true,
     days: [-5, -4, -3],
     sort: 60,
     rule: { type: "oral", freq: "bid" },
@@ -189,7 +200,7 @@ const THIOBUCY_MEDS: MedDef[] = [
     id: "cyclophosphamide",
     name: "Cyclophosphamide inj",
     detail: "[MIV] <Mix> · miv over 1hr",
-    solvent: NS500,
+    solvent: D5W200,
     suffix: "ov1h",
     timeNote: "얼음/EKG",
     days: [-3, -2],
@@ -379,7 +390,7 @@ const HDMEL_MEDS: MedDef[] = [
     rule: { type: "relative", ref: "melphalan", offsetMin: -360, repeatEveryMin: 240, count: 3 },
   },
   {
-    id: "furosemide-mel",
+    id: "furosemide 20mg",
     name: "Lasix 20mg/2ml inj(Furosemide)",
     detail: "[IVS] · +1hr after Mel",
     suffix: "MEL+1h",
@@ -662,7 +673,7 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     id: "ptcy",
     name: "Cyclophosphamide inj (PTCy)",
     detail: "50 mg/kg [MIV] <Mix> · miv over 1hr",
-    solvent: NS500,
+    solvent: D5W200,
     suffix: "ov1h",
     timeNote: "얼음/EKG",
     note: "D+3, D+4 (stem cell infusion 후 72시간)",
@@ -701,13 +712,21 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     rule: { type: "hydration", rateCcHr: 125 },
   },
   {
-    id: "furosemide-ptcy",
-    name: "Furosemide inj 10mg",
-    detail: "[IV] q6h PRN",
+    id: "furosemide 10mg",
+    name: "Lasix inj 20mg (Furosemide) 10mg",
+    detail: "[IV] q6h",
     note: "if 6hr u/o < 1L or 150ml/hr",
     days: [3, 4],
     sort: 85,
-    rule: { type: "prn" },
+    rule: { type: "fixed", times: ["06:00"] },
+  },
+    {
+    id: "urine-output",
+    name: "Check urine output q 6hr",
+    detail: "if 6hr u/o < 1L or 150ml/hr → furosemide 1A ivs",
+    days: [3, 4],
+    sort: 86,
+    rule: { type: "fixed", times: ["06:00", "12:00", "18:00"] },
   },
   {
     id: "tacrolimus-ptcy",
@@ -955,7 +974,13 @@ export function getOrderMedsForDay(
 
   const dayList = days && days.length > 0 ? days : getOrderDaysForRegimen(regimenId)
   const todays = all.filter((m) => m.days.includes(day))
-  const startMin = getChemoStartMinutesForDay(regimenId, day, dayList, settings)
+  const rawStart = getChemoStartMinutesForDay(regimenId, day, dayList, settings)
+  // mesna / M-pred / dexamethasone <Mix> 오더가 있는 날은 그 오더를 11:00 에 두고
+  // 항암제를 11:30 이후로 밀어낸다
+  const hasMixPriority = todays.some(
+    (m) => /^(mesna|mpred|dexamethasone)/.test(m.id) && (m.solvent ?? "").includes("<Mix>"),
+  )
+  const startMin = hasMixPriority ? Math.max(rawStart, 11 * 60 + 30) : rawStart
   const { at: anchors, firstStart } = scheduleChemo(todays, startMin)
 
   return todays
@@ -980,9 +1005,11 @@ export function getOrderMedsForDay(
            (m.rule.type === "antiemetic-iv" && day === sortedDays[0])),
         lastOralDose:
           !m.noExtraOrder &&
+          !m.noHoldLast &&
           (m.oral === true || m.firstDoseExtra === true || m.rule.type === "antiemetic-iv") &&
           m.continuous !== true &&
           day === sortedDays[sortedDays.length - 1],
+        endMark: m.noHoldLast === true && day === sortedDays[sortedDays.length - 1],
         scheduleKind: displayKind(m),
         defaultTimes: resolveTimes(m, anchors, firstStart, settings),
         timeOptions: m.rule.type === "select" ? m.rule.options : undefined,

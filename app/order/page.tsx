@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowRight, ChevronDown } from "lucide-react"
 import { StepHeader } from "@/components/step-header"
 import { Badge, OrderMedRow } from "@/components/order-med-row"
 import { useFlow } from "@/contexts/flow-context"
-import { findRegimen } from "@/lib/regimens"
+import { findRegimen, isAutoRegimen } from "@/lib/regimens"
 import { computeCalc, isValidPatient } from "@/lib/calc"
 import { formatDay, getOrderDaysForRegimen, getPullLimitMin } from "@/lib/order-schedule"
 import type { OrderMedWithMeta } from "@/lib/order-schedule"
@@ -74,8 +74,8 @@ export default function OrderPage() {
 
   const prnTimes = useMemo(() => {
     if (!window_) return {}
-    return getPrnTimes(day, window_.meds, times)
-  }, [day, window_, times])
+    return getPrnTimes(day, window_.meds, times, isAutoRegimen(regimenId))
+  }, [day, window_, times, regimenId])
 
   if (!hydrated || !regimen || !isValidPatient(patient) || !window_) return null
 
@@ -291,6 +291,7 @@ function getPrnTimes(
   day: number,
   meds: OrderMedWithMeta[],
   times: TimesState,
+  isAuto: boolean,
 ): Record<string, string[]> {
   const nsTimes: string[] = []
   const d5wTimes: string[] = []
@@ -308,9 +309,13 @@ function getPrnTimes(
     }
   }
 
+  // 주입술 시간 = Allo 17:00 / Auto 14:00, D0 에만 NS 고정 스케줄
+  const infusion = isAuto ? "14:00" : "17:00"
+  const d0Ns = day === 0 ? [infusion, infusion] : []
+
   return {
-    ns100: ["00:00", "00:00"],
-    ns50: ["00:00", "00:00", ...nsTimes],
+    ns100: d0Ns,
+    ns50: [...d0Ns, ...nsTimes],
     d5w50: [...d5wTimes],
     d5w20: Array.from({ length: d5wCount * 2 }, () => "00:00"),
     lasix: [],
