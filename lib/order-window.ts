@@ -88,6 +88,7 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("furosemide 10mg"), keywords: ["furosemide 10mg", "Furosemide 10mg"] },
   { test: (id) => id === "urine-output", keywords: ["check urine output", "Check urine output"] },
   { test: (id) => id.startsWith("citopcin"), keywords: ["Ciprofloxacin"] },
+  { test: (id) => id.startsWith("acyclovir"), keywords: ["acyclovir", "Acyclovir"] },
   { test: (id) => id.startsWith("ursa"), keywords: ["UDCA"] },
   { test: (id) => id.startsWith("mycamine"), keywords: ["Micafungin"] },
   { test: (id) => id.startsWith("zyprexa"), keywords: ["Olanzapine"] },
@@ -178,7 +179,13 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
   const eff = effectiveSettings(settings, day, firstDay)
 
   const lines = buildRegimenLines(regimenId, calc, doseOverrides).map(sanitizeLine)
-  const rawMeds = getOrderMedsForDay(regimenId, day, eff, days)
+  const rawMeds = getOrderMedsForDay(
+    regimenId,
+    day,
+    eff,
+    days,
+    settings,
+  )
 
   // 레지멘 라인에서 총 용량 추출 후 OrderMed에 주입
   const meds = rawMeds.map((med) => {

@@ -1,4 +1,4 @@
-import type { OrderMed } from "@/lib/regimens"
+import { isAutoRegimen, type OrderMed } from "@/lib/regimens"
 import {
   BUSULFAN_PULL_MIN,
   CHEMO_PULL_MIN,
@@ -59,6 +59,8 @@ type TimeRule =
   | { type: "mycamine" }
   /** 수액 교환 (rate 기반 grid) */
   | { type: "hydration"; rateCcHr: number }
+  /** HDMEL Melphalan hydration */
+  | { type: "melphalan-hydration" }
   /** PRN */
   | { type: "prn" }
   /** 시간 선택 드롭다운 (Thiotepa / MTX D1) */
@@ -120,6 +122,322 @@ export function getHydrationTimes(rateCcHr: number): string[] {
     8: [0, 8, 16],
   }
   return (anchors[interval] ?? anchors[6]!).map((h) => fromMinutes(h * 60))
+}
+
+const DAY_MINUTES = 24 * 60
+const HOUR_MINUTES = 60
+const HYDRATION_BAG_VOLUME_CC = 1000
+const MELPHALAN_HYDRATION_BEFORE_MINUTES = 6 * 60
+const MELPHALAN_HYDRATION_AFTER_MINUTES = 12 * 60
+const HDMEL_MELPHALAN_DAYS = [-3, -2] as const
+const HDMEL_HYDRATION_REVIEW_DAY = -1
+const HDMEL_HYDRATION_REVIEW_MINUTE = 8 * 60
+
+type MelphalanHydrationRate = 75 | 250
+
+export interface MelphalanStart {
+  day: number
+  /** 해당 날짜 00:00부터의 분 */
+  minute: number
+}
+
+interface HydrationWindow {
+  start: number
+  end: number
+}
+
+type HydrationEvent =
+  | {
+      at: number
+      rateCcHr: MelphalanHydrationRate
+      kind: "bag-change"
+      /** 속도 표기가 필요한 00:00/250ch 시작 이벤트 */
+      showRate?: boolean
+    }
+  | {
+      at: number
+      rateCcHr: MelphalanHydrationRate
+      kind: "rate-change"
+    }
+  | {
+      at: number
+      kind: "physician-check"
+    }
+
+interface HydrationBagState {
+  remainingCc: number
+  rateCcHr: MelphalanHydrationRate
+  updatedAt: number
+}
+
+/**
+ * 13:30 Melphalan의 -6시간은 07:30이지만
+ * 사용자 예시대로 08:00 정시에 스케줄링한다.
+ */
+function roundToSchedulingHour(minute: number): number {
+  return Math.round(minute / 60) * 60
+}
+
+/**
+ * 서로 겹치거나 맞닿은 250ch 구간을 하나로 합친다.
+ *
+ * 예:
+ * 이전 Melphalan hydration이 06:00까지이고
+ * 다음 Melphalan hydration이 05:00부터이면
+ * 중간에 75ch로 변경하지 않고 250ch를 계속 유지한다.
+ */
+function mergeHydrationWindows(
+  windows: HydrationWindow[],
+): HydrationWindow[] {
+  const sorted = windows.slice().sort((a, b) => a.start - b.start)
+  const merged: HydrationWindow[] = []
+
+  for (const window of sorted) {
+    const previous = merged[merged.length - 1]
+
+    if (!previous || window.start > previous.end) {
+      merged.push({ ...window })
+      continue
+    }
+
+    previous.end = Math.max(previous.end, window.end)
+  }
+
+  return merged
+}
+
+function consumeHydrationUntil(
+  state: HydrationBagState,
+  targetAt: number,
+): HydrationBagState {
+  const elapsedMinutes = Math.max(0, targetAt - state.updatedAt)
+  const infusedCc = state.rateCcHr * (elapsedMinutes / HOUR_MINUTES)
+
+  return {
+    ...state,
+    remainingCc: Math.max(0, state.remainingCc - infusedCc),
+    updatedAt: targetAt,
+  }
+}
+
+/** 현재 속도를 유지할 때 bag이 정확히 소진되는 시각 */
+function getExactBagEmptyAt(state: HydrationBagState): number {
+  const remainingMinutes =
+    (state.remainingCc / state.rateCcHr) * HOUR_MINUTES
+  return state.updatedAt + remainingMinutes
+}
+
+/**
+ * 예상 소진시각보다 늦지 않은 직전 정시로 bag 교환을 당긴다.
+ * 예: 08:40 → 08:00, 09:00 → 09:00
+ */
+function getScheduledBagChangeAt(state: HydrationBagState): number {
+  const exactEmptyAt = getExactBagEmptyAt(state)
+  // 부동소수점 오차로 정확한 정시가 한 시간 전으로 내려가지 않게 보정한다.
+  return Math.floor((exactEmptyAt + 1e-7) / HOUR_MINUTES) * HOUR_MINUTES
+}
+
+function formatHydrationEvent(event: HydrationEvent): string {
+  const time = fromMinutes(event.at)
+  if (event.kind === "physician-check") return `${time}(주치의확인)`
+  if (event.kind === "rate-change") return `${time}(${event.rateCcHr}ch 속변)`
+  if (event.showRate) return `${time}(${event.rateCcHr}ch)`
+  return time
+}
+
+/**
+ * HDMEL hydration 수행시간 계산
+ *
+ * - Melphalan -6시간부터 +12시간까지 250ch
+ * - `속변`은 bag을 교환하지 않고 기존 잔량을 유지
+ * - bag 잔량과 현재 속도로 소진시각을 계산한 뒤 직전 정시에 교환
+ * - 250ch 시작 및 D-2/D-1 00:00 수행은 새 1L bag으로 교환
+ * - D-1 08:00에 주치의확인을 표시하고 이후 hydration 스케줄은 종료
+ */
+export function buildMelphalanHydrationTimes(
+  day: number,
+  melphalanStarts: MelphalanStart[],
+): string[] {
+  if (melphalanStarts.length === 0) return []
+
+  const windows = mergeHydrationWindows(
+    melphalanStarts.map(({ day: melphalanDay, minute }) => {
+      const melphalanAt = melphalanDay * DAY_MINUTES + minute
+      return {
+        start: roundToSchedulingHour(
+          melphalanAt - MELPHALAN_HYDRATION_BEFORE_MINUTES,
+        ),
+        end: roundToSchedulingHour(
+          melphalanAt + MELPHALAN_HYDRATION_AFTER_MINUTES,
+        ),
+      }
+    }),
+  )
+
+  const dayStart = day * DAY_MINUTES
+  const dayEnd = dayStart + DAY_MINUTES
+  const scheduleEnd =
+    day === HDMEL_HYDRATION_REVIEW_DAY
+      ? dayStart + HDMEL_HYDRATION_REVIEW_MINUTE
+      : dayEnd
+  const fixedEvents = new Map<number, HydrationEvent>()
+
+  function addFixedEvent(event: HydrationEvent) {
+    const current = fixedEvents.get(event.at)
+    if (!current) {
+      fixedEvents.set(event.at, event)
+      return
+    }
+
+    // D-1 08:00에는 다른 이벤트 대신 주치의확인을 최종 표시한다.
+    if (event.kind === "physician-check") {
+      fixedEvents.set(event.at, event)
+      return
+    }
+
+    // 그 외 같은 시각에는 실제 bag 교환이 속변보다 우선한다.
+    if (current.kind !== "physician-check" && event.kind === "bag-change") {
+      fixedEvents.set(event.at, event)
+    }
+  }
+
+  const firstMelphalanDay = Math.min(...melphalanStarts.map((start) => start.day))
+  const lastCarryDay = Math.max(...melphalanStarts.map((start) => start.day + 1))
+
+  if (day > firstMelphalanDay && day <= lastCarryDay) {
+    const rateAtMidnight: MelphalanHydrationRate = windows.some(
+      (window) => window.start <= dayStart && dayStart < window.end,
+    )
+      ? 250
+      : 75
+
+    addFixedEvent({
+      at: dayStart,
+      rateCcHr: rateAtMidnight,
+      kind: "bag-change",
+      showRate: true,
+    })
+  }
+
+  for (const window of windows) {
+    if (window.start >= dayStart && window.start < scheduleEnd) {
+      addFixedEvent({
+        at: window.start,
+        rateCcHr: 250,
+        kind: "bag-change",
+        showRate: true,
+      })
+    }
+
+    // 자정에는 해당 날짜의 새 bag 오더가 우선하므로 별도 속변을 만들지 않는다.
+    if (window.end > dayStart && window.end < scheduleEnd) {
+      addFixedEvent({
+        at: window.end,
+        rateCcHr: 75,
+        kind: "rate-change",
+      })
+    }
+  }
+
+  if (day === HDMEL_HYDRATION_REVIEW_DAY) {
+    addFixedEvent({
+      at: scheduleEnd,
+      kind: "physician-check",
+    })
+  }
+
+  const orderedFixedEvents = [...fixedEvents.values()].sort((a, b) => a.at - b.at)
+  if (orderedFixedEvents.length === 0) return []
+
+  const schedule: HydrationEvent[] = []
+  let state: HydrationBagState | null = null
+
+  function appendBagChangesBefore(limitAt: number) {
+    if (!state) return
+
+    while (true) {
+      const bagChangeAt = getScheduledBagChangeAt(state)
+      if (bagChangeAt >= limitAt) break
+
+      state = consumeHydrationUntil(state, bagChangeAt)
+      schedule.push({
+        at: bagChangeAt,
+        rateCcHr: state.rateCcHr,
+        kind: "bag-change",
+      })
+      state = {
+        remainingCc: HYDRATION_BAG_VOLUME_CC,
+        rateCcHr: state.rateCcHr,
+        updatedAt: bagChangeAt,
+      }
+    }
+  }
+
+  for (const event of orderedFixedEvents) {
+    if (state) appendBagChangesBefore(event.at)
+
+    const consumed: HydrationBagState | null = state
+      ? consumeHydrationUntil(state, event.at)
+      : null
+    if (event.kind === "bag-change") {
+      state = {
+        remainingCc: HYDRATION_BAG_VOLUME_CC,
+        rateCcHr: event.rateCcHr,
+        updatedAt: event.at,
+      }
+    } else if (event.kind === "rate-change" && consumed) {
+      // 속변: 현재 bag 잔량은 그대로 두고 속도만 변경한다.
+      state = {
+        ...consumed,
+        rateCcHr: event.rateCcHr,
+      }
+    }
+
+    schedule.push(event)
+  }
+
+  // D-1은 08:00 주치의확인, 그 외 날짜는 자정 전까지만 교환시간을 생성한다.
+  appendBagChangesBefore(scheduleEnd)
+
+  return schedule.sort((a, b) => a.at - b.at).map(formatHydrationEvent)
+}
+
+/**
+ * D-3 및 D-2의 실제 Melphalan 수행시간을 기준으로
+ * D-3~D-1 hydration 시간을 계산한다.
+ *
+ * D-2 Melphalan 시간:
+ * - 항암제 당기기 "아니오": 전일 Melphalan 수행시간 유지
+ * - 항암제 당기기 "예": 레지멘의 당기기 한도를 적용
+ * - 계산 결과가 11:00보다 빠르면 11:00으로 제한
+ */
+export function getHdmelHydrationTimes(
+  day: number,
+  settings: ScheduleSettings,
+  days: number[],
+): string[] {
+  const starts: MelphalanStart[] =
+    HDMEL_MELPHALAN_DAYS.map(
+      (melphalanDay) => ({
+        day: melphalanDay,
+
+        /*
+         * 같은 settings를 전달해야 D-2의 pullForward 설정이
+         * 실제 Melphalan 수행시간 계산에 반영된다.
+         */
+        minute: getChemoStartMinutesForDay(
+          "hdmel",
+          melphalanDay,
+          days,
+          settings,
+        ),
+      }),
+    )
+
+  return buildMelphalanHydrationTimes(
+    day,
+    starts,
+  )
 }
 
 /** Mesna q6hr — CTX 시작 30분 전부터 6시간 간격 4회 (24시 넘으면 익일 표기) */
@@ -383,11 +701,10 @@ const HDMEL_MEDS: MedDef[] = [
     name: "Dextrose 5% Na K2 1L bag(D5WNa77K20)",
     detail: "[IV] 250ch MEL -6hr ~ +12hr, in the meantime 75ch",
     sup: true,
-    timeNote: "250 cc/hr",
     note: "",
-    days: [-3, -2],
+    days: [-3, -2, -1],
     sort: 80,
-    rule: { type: "relative", ref: "melphalan", offsetMin: -360, repeatEveryMin: 240, count: 3 },
+    rule: { type: "melphalan-hydration" },
   },
   {
     id: "furosemide 20mg",
@@ -588,6 +905,16 @@ const BUFLUBATG_MEDS: MedDef[] = [
     rule: { type: "oral", freq: "bid" },
   },
   {
+    id: "acyclovir-batg",
+    name: "Acyclovir 200mg tab",
+    detail: "400 mg (2 tab) [P.O] bid",
+    oral: true,
+    continuous: true,
+    days: [-6, -5, -4, -3, -2, -1, 0],
+    sort: 72,
+    rule: { type: "oral", freq: "bid" },
+  },
+  {
     id: "ursa-batg",
     name: "Ursa 200mg tab (UDCA)",
     detail: "1 tab [P.O] tid",
@@ -760,6 +1087,16 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     rule: { type: "oral", freq: "bid" },
   },
   {
+    id: "acyclovir-ptcy",
+    name: "Acyclovir 200mg tab",
+    detail: "400 mg (2 tab) [P.O] bid",
+    oral: true,
+    continuous: true,
+    days: [-6, -5, -4, -3, -2, -1, 0, 3, 4],
+    sort: 72,
+    rule: { type: "oral", freq: "bid" },
+  },
+  {
     id: "ursa-ptcy",
     name: "Ursa 200mg tab (UDCA)",
     detail: "1 tab [P.O] tid",
@@ -807,8 +1144,26 @@ const REGIMEN_MEDS: Record<string, MedDef[]> = {
   "buflu-ptcy": BUFLU_PTCY_MEDS,
 }
 
+/** Auto 레지멘 공통 D0 오더 */
+const AUTO_D0_MEDS: MedDef[] = [
+  {
+    id: "stemcell-water-irrigation-auto-d0",
+    name: "Water for Irrigation 10btl",
+    detail: "",
+    days: [0],
+    sort: 2,
+    rule: { type: "fixed", times: ["00:00"] },
+  },
+]
+
+function medsForRegimen(regimenId: string): MedDef[] | null {
+  const meds = REGIMEN_MEDS[regimenId]
+  if (!meds) return null
+  return isAutoRegimen(regimenId) ? [...meds, ...AUTO_D0_MEDS] : meds
+}
+
 export function getOrderDaysForRegimen(regimenId: string | null): number[] {
-  const meds = regimenId ? REGIMEN_MEDS[regimenId] : null
+  const meds = regimenId ? medsForRegimen(regimenId) : null
   if (!meds) return CONDITIONING_DAYS
   const set = new Set<number>()
   meds.forEach((m) => m.days.forEach((d) => set.add(d)))
@@ -841,6 +1196,15 @@ export interface OrderMedWithMeta extends OrderMed {
 function chemoDefsForDay(regimenId: string, day: number): MedDef[] {
   const all = REGIMEN_MEDS[regimenId] ?? []
   return all.filter((m) => m.days.includes(day) && m.rule.type === "chemo")
+}
+
+/** 실제 첫 항암제 투약일 (Thiotepa처럼 시간 선택형인 항암제 포함) */
+function getFirstChemoDay(regimenId: string): number | null {
+  const meds = REGIMEN_MEDS[regimenId] ?? []
+  const chemoDays = meds
+    .filter((m) => m.rule.type === "chemo" || m.rule.type === "select")
+    .flatMap((m) => m.days)
+  return chemoDays.length > 0 ? Math.min(...chemoDays) : null
 }
 
 /** 그 날 당길 수 있는 최대 시간(분) */
@@ -905,6 +1269,10 @@ function resolveTimes(
   anchors: Record<string, number>,
   firstChemo: number,
   settings: ScheduleSettings,
+  day: number,
+  firstChemoDay: number | null,
+  days: number[],
+  timelineSettings: ScheduleSettings,
 ): string[] {
   const rule = med.rule
   switch (rule.type) {
@@ -930,14 +1298,35 @@ function resolveTimes(
     }
     case "fixed":
       return rule.times
-    case "oral":
-      if (rule.freq === "bid") return getBidOralTimes(settings)
-      if (rule.freq === "tid") return getTidOralTimes(settings)
+    case "oral": {
+      const isFirstChemoDay = day === firstChemoDay
+      const fixedBidAfterFirstChemo =
+        med.id.startsWith("citopcin") || med.id.startsWith("acyclovir")
+
+      if (rule.freq === "bid") {
+        if (fixedBidAfterFirstChemo && !isFirstChemoDay) return ["08:00", "20:00"]
+        return getBidOralTimes(settings)
+      }
+
+      if (rule.freq === "tid") {
+        if (med.id.startsWith("ursa") && !isFirstChemoDay) {
+          return ["08:00", "12:00", "18:00"]
+        }
+        return getTidOralTimes(settings)
+      }
+
       return [getQdOralTime(settings, rule.base)]
+    }
     case "mycamine":
       return [getMycamineTime(settings)]
     case "hydration":
       return getHydrationTimes(rule.rateCcHr)
+    case "melphalan-hydration":
+      return getHdmelHydrationTimes(
+        day,
+        timelineSettings,
+        days,
+      )
     case "prn":
       return ["PRN"]
   }
@@ -967,12 +1356,14 @@ export function getOrderMedsForDay(
   day: number,
   settings: ScheduleSettings,
   days?: number[],
+  timelineSettings: ScheduleSettings = settings,
 ): OrderMedWithMeta[] {
   if (!regimenId) return []
-  const all = REGIMEN_MEDS[regimenId]
+  const all = medsForRegimen(regimenId)
   if (!all) return []
 
   const dayList = days && days.length > 0 ? days : getOrderDaysForRegimen(regimenId)
+  const firstChemoDay = getFirstChemoDay(regimenId)
   const todays = all.filter((m) => m.days.includes(day))
   const rawStart = getChemoStartMinutesForDay(regimenId, day, dayList, settings)
   // mesna / M-pred / dexamethasone <Mix> 오더가 있는 날은 그 오더를 11:00 에 두고
@@ -1011,7 +1402,16 @@ export function getOrderMedsForDay(
           day === sortedDays[sortedDays.length - 1],
         endMark: m.noHoldLast === true && day === sortedDays[sortedDays.length - 1],
         scheduleKind: displayKind(m),
-        defaultTimes: resolveTimes(m, anchors, firstStart, settings),
+        defaultTimes: resolveTimes(
+          m,
+          anchors,
+          firstStart,
+          settings,
+          day,
+          firstChemoDay,
+          dayList,
+          timelineSettings,
+        ),
         timeOptions: m.rule.type === "select" ? m.rule.options : undefined,
       }
     })

@@ -1797,259 +1797,6 @@ export function StepHeader({ current }: { current: number }) {
 }
 </file>
 
-<file path="lib/order-window.ts">
-import type { CalcResult } from "@/lib/calc"
-import type { DoseOverrides } from "@/lib/dose-overrides"
-import { buildRegimenLines, type RenderLine } from "@/lib/regimen-render"
-import {
-  getOrderMedsForDay,
-  getChemoStartMinutesForDay,
-  getHydrationTimes,
-  type OrderMedWithMeta,
-} from "@/lib/order-schedule"
-import { DEFAULT_SCHEDULE_SETTINGS, type ScheduleSettings } from "@/lib/schedule-settings"
-
-/**
- * 오더창 = 레지멘 전문(기울임체) + 실제 처방 오더(정자 + 수행시간)
- * 레지멘 라인 아래에 해당 라인에서 파생된 오더를 붙여서 렌더한다.
- */
-export type OrderWindowRow =
-  | { kind: "regimen"; key: string; line: RenderLine }
-  | { kind: "med"; key: string; med: OrderMedWithMeta }
-
-/**
- * 동의서 응답은 첫 항암 투약일에만 적용.
- * 이후 날짜는 기본 시작시간 + 일자별 "항암제 당기기" 설정을 사용한다.
- */
-export function effectiveSettings(
-  settings: ScheduleSettings,
-  day: number,
-  firstDay: number,
-): ScheduleSettings {
-  const pullForward = settings.pullForward ?? {}
-  void day
-  void firstDay
-  // 첫날 이후에도 동의서/시작시간 선택을 그대로 유지 → 전일 투약시간과 연동
-  return { ...settings, pullForward }
-}
-
-/* ------------------------------------------------------------------ *
- * 기울임체 레지멘 텍스트 정리
- *  얼음 / EKG / cc/hr 등 "오더 실행 정보"는 오더 행의 수행시간 옆에만 표기
- * ------------------------------------------------------------------ */
-
-const STRIP_PATTERNS: RegExp[] = [
-  /\s*\(\s*얼음[^)]*\)/g,
-  /\s*\[\s*얼음[^\]]*\]/g,
-  /\s*,?\s*얼음\s*(\/\s*)?/g,
-  /\s*\(\s*EKG[^)]*\)/g,
-  /\s*,?\s*EKG\s*(monitoring)?/g,
-  /\s*\d+(\.\d+)?\s*~?\s*\d*\s*cc\/hr/g,
-]
-
-function stripOrderInfo(text: string): string {
-  let out = text
-  for (const re of STRIP_PATTERNS) out = out.replace(re, "")
-  return out.replace(/\s{2,}/g, " ").replace(/\s+([,.)])/g, "$1").trimEnd()
-}
-
-function sanitizeLine(line: RenderLine): RenderLine {
-  if (line.segments) {
-    const segments = line.segments
-      .map((s) => ({ ...s, text: stripOrderInfo(s.text) }))
-      .filter((s) => s.text.trim().length > 0)
-    return { ...line, segments }
-  }
-  if (line.text) return { ...line, text: stripOrderInfo(line.text) }
-  return line
-}
-
-/** med id → 레지멘 라인 매칭 키워드 */
-const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
-  { test: (id) => id.startsWith("thiotepa"), keywords: ["Thiotepa"] },
-  { test: (id) => id.startsWith("busulfan"), keywords: ["Busulfan"] },
-  { test: (id) => id.startsWith("levetiracetam 500mg"), keywords: ["Levetiracetam", "Keppra", "다음날 500mg PO"] },
-  { test: (id) => id.startsWith("levetiracetam 1g"), keywords: ["Levetiracetam 1500mg", "Keppra"] },
-  { test: (id) => id === "ptcy", keywords: ["PTCy", "Cyclophosphamide"] },
-  { test: (id) => id.startsWith("cyclophosphamide"), keywords: ["Cyclophosphamide"] },
-  { test: (id) => id.startsWith("palonosetron"), keywords: ["Palonosetron"]
-   },
-  { test: (id) => id.startsWith("granisetron-po"), keywords: ["Granisetron", "Serotonin antagnoist PO", "Serotonin antagonist PO"]},
-  { test: (id) => id.startsWith("aprepitant 125mg"), keywords: ["aprepitant 125mg", "Aprepitant 125mg"] },
-  { test: (id) => id.startsWith("aprepitant 80mg"), keywords: ["aprepitant 80mg", "Aprepitant 80mg"] },
-  {
-    test: (id) => id.startsWith("granisetron-iv"),
-    keywords: ["Granisetron", "Serotonin antagonist IV"],
-  },
-  { test: (id) => id.startsWith("mesna"), keywords: ["Mesna"] },
-  { test: (id) => id.startsWith("hyd"), keywords: ["hydration", "Hydration", "cc/hr"] },
-  { test: (id) => id.startsWith("hydration"), keywords: ["hydration", "Hydration"] },
-  { test: (id) => id.startsWith("furosemide 20mg"), keywords: ["furosemide 20mg", "Furosemide 20mg"] },
-  { test: (id) => id.startsWith("furosemide 10mg"), keywords: ["furosemide 10mg", "Furosemide 10mg"] },
-  { test: (id) => id === "urine-output", keywords: ["check urine output", "Check urine output"] },
-  { test: (id) => id.startsWith("citopcin"), keywords: ["Ciprofloxacin"] },
-  { test: (id) => id.startsWith("ursa"), keywords: ["UDCA"] },
-  { test: (id) => id.startsWith("mycamine"), keywords: ["Micafungin"] },
-  { test: (id) => id.startsWith("zyprexa"), keywords: ["Olanzapine"] },
-  { test: (id) => id.startsWith("melphalan"), keywords: ["Melphalan"] },
-  { test: (id) => id.startsWith("dexamethasone 12mg"), keywords: ["dexamethasone 12mg", "Dexamethasone 12mg"] },
-  { test: (id) => id.startsWith("dexamethasone 10mg"), keywords: ["dexamethasone 10mg", "Dexamethasone 10mg"] },
-  { test: (id) => id.startsWith("dexamethasone 8mg"), keywords: ["dexamethasone 8mg", "Dexamethasone 8mg"] },
-  { test: (id) => id.startsWith("fludarabine"), keywords: ["Fludarabine"] },
-  { test: (id) => id.startsWith("mtx"), keywords: ["MTX", "Methotrexate"] },
-  { test: (id) => id === "atg", keywords: ["ATG (Rabbit", "ATG"] },
-  { test: (id) => id.startsWith("mpred"), keywords: ["Methylprednisolone", "M-pred"] },
-  { test: (id) => id.startsWith("acetaminophen"), keywords: ["Acetaminophen"] },
-  { test: (id) => id.startsWith("chlorpheniramine"), keywords: ["Chlorpheniramine"] },
-  { test: (id) => id.startsWith("hydrocortisone"), keywords: ["Hydrocortisone"] },
-  { test: (id) => id.startsWith("tacrolimus"), keywords: ["Tacrolimus"] },
-  { test: (id) => id.startsWith("mmf"), keywords: ["MMF", "Mycophenolate"] },
-  { test: (id) => id.startsWith("stemcell"), keywords: ["Stem cell infusion"] },
-]
-
-function lineText(line: RenderLine): string {
-  if (line.segments) return line.segments.map((s) => s.text).join("")
-  return line.text ?? ""
-}
-
-function extractDoseText(line: RenderLine): string | undefined {
-  if (!line.segments) return undefined
-  const red = line.segments
-    .filter((s) => s.red && /\d/.test(s.text))
-    .map((s) => s.text.trim())
-    .join(" ")
-  const m = red.match(/\d+(\.\d+)?\s*(mg|g|mg\/m2|g\/m2|mg\/m²)/i)
-  return m ? m[0] : undefined
-}
-
-/** 항암제 라인 및 바로 아래 용매 라인에서 계산된 용매 용량(예: 300 mL) 추출 */
-function extractSolventDoseText(lines: RenderLine[], idx: number): string | undefined {
-  for (let i = idx; i <= idx + 3 && i < lines.length; i++) {
-    const line = lines[i]
-    if (!line) continue
-    const red = (line.segments ?? [])
-      .filter((s) => s.red)
-      .map((s) => s.text)
-      .join(" ")
-    const hit = red.match(/\d+(\.\d+)?\s*(mL|ml|cc)/)
-    if (hit) return hit[0]
-  }
-  return undefined
-}
-
-/** 레지멘 annotation(`240 cc/hr`)에서 hydration 속도 추출 */
-function extractRateNote(line: RenderLine | undefined): string | undefined {
-  const src = `${line?.annotation ?? ""} ${line ? lineText(line) : ""}`
-  const hit = src.match(/(\d+(\.\d+)?)\s*cc\/hr/i)
-  return hit ? `${hit[1]}cc/hr` : undefined
-}
-
-function anchorIndex(medId: string, lines: RenderLine[]): number {
-  const entry = ANCHORS.find((a) => a.test(medId))
-  if (!entry) return -1
-  for (const kw of entry.keywords) {
-    const idx = lines.findIndex((l) => (l.kind ?? "normal") !== "title" && lineText(l).includes(kw))
-    if (idx >= 0) return idx
-  }
-  return -1
-}
-
-export interface OrderWindowInput {
-  regimenId: string | null
-  day: number
-  days: number[]
-  calc: CalcResult
-  doseOverrides: DoseOverrides
-  settings: ScheduleSettings
-}
-
-export interface OrderWindow {
-  rows: OrderWindowRow[]
-  /** 해당 일자에 실제 처방되는 오더 */
-  meds: OrderMedWithMeta[]
-  /** 첫 항암 투약일인지 (동의서 질문 노출 조건) */
-  isFirstDay: boolean
-}
-
-export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
-  const { regimenId, day, days, calc, doseOverrides, settings } = input
-  const firstDay = days[0] ?? day
-  const isFirstDay = day === firstDay
-  const eff = effectiveSettings(settings, day, firstDay)
-
-  const lines = buildRegimenLines(regimenId, calc, doseOverrides).map(sanitizeLine)
-  const rawMeds = getOrderMedsForDay(regimenId, day, eff, days)
-
-  // 레지멘 라인에서 총 용량 추출 후 OrderMed에 주입
-  const meds = rawMeds.map((med) => {
-    const idx = anchorIndex(med.id, lines)
-    const line = idx >= 0 ? lines[idx] : undefined
-    const doseText = line ? extractDoseText(line) : undefined
-    const solventDoseText = idx >= 0 && med.solvent ? extractSolventDoseText(lines, idx) : undefined
-    const rateNote = med.id.startsWith("hyd") ? extractRateNote(line) : undefined
-    const defaultTimes =
-      rateNote && med.id.startsWith("hyd")
-        ? getHydrationTimes(Number.parseFloat(rateNote))
-        : med.defaultTimes
-    return { ...med, doseText, solventDoseText, rateNote, defaultTimes }
-  })
-
-
-  // 라인별 오더 그룹
-  const byIndex = new Map<number, OrderMedWithMeta[]>()
-  const unmatched: OrderMedWithMeta[] = []
-  for (const med of meds) {
-    const idx = anchorIndex(med.id, lines)
-    if (idx < 0) {
-      unmatched.push(med)
-      continue
-    }
-    const arr = byIndex.get(idx) ?? []
-    arr.push(med)
-    byIndex.set(idx, arr)
-  }
-
-  const rows: OrderWindowRow[] = []
-  lines.forEach((line, i) => {
-    rows.push({ kind: "regimen", key: `l${i}`, line })
-    if ((line.kind ?? "normal") === "spacer") return
-    for (const med of byIndex.get(i) ?? []) {
-      rows.push({ kind: "med", key: `m${i}-${med.id}`, med })
-    }
-  })
-  for (const med of unmatched) {
-    rows.push({ kind: "med", key: `mx-${med.id}`, med })
-  }
-
-  return { rows, meds, isFirstDay }
-}
-
-/* ------------------------------------------------------------------ *
- * PRN order (모든 일자 공통)
- * ------------------------------------------------------------------ */
-
-export interface PrnOrder {
-  id: string
-  name: string
-  detail: string
-  badge: "PRN" | "TIT" | "SUP"
-}
-
-export const PRN_ORDERS: PrnOrder[] = [
-  { id: "lasix", name: "Lasix inj 20mg (Furosemide)", detail: "20 mg [IV] prn", badge: "PRN" },
-  {
-    id: "chlorph-prn",
-    name: "Chlorpheniramine inj 4mg",
-    detail: "4 mg [IVS] prn",
-    badge: "PRN",
-  },
-  { id: "ns100", name: "0.9% NS 100ml", detail: "1 bag [IV] prn", badge: "SUP" },
-  { id: "ns50", name: "0.9% NS 50ml", detail: "1 bag [IV] prn", badge: "SUP" },
-  { id: "d5w50", name: "5% Dextrose 50mL", detail: "1 bag [IV] prn", badge: "SUP" },
-  { id: "d5w20", name: "5% Dextrose 20cc amp", detail: "1 amp [IV] prn", badge: "SUP" },
-]
-</file>
-
 <file path="lib/regimen-render.ts">
 import type { CalcResult } from "@/lib/calc"
 import { round } from "@/lib/calc"
@@ -2886,6 +2633,688 @@ export function buildRegimenLines(
 }
 </file>
 
+<file path="app/regimen/page.tsx">
+"use client"
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, ArrowRight, Printer } from "lucide-react"
+import { StepHeader } from "@/components/step-header"
+import { useFlow } from "@/contexts/flow-context"
+import { findRegimen } from "@/lib/regimens"
+import { computeCalc, isValidPatient } from "@/lib/calc"
+import { buildRegimenLines, type Segment } from "@/lib/regimen-render"
+import { adjustRegimenLines, type AdjustedLine } from "@/lib/regimen-adjust"
+import type { DoseKey } from "@/lib/dose-overrides"
+import { cn } from "@/lib/utils"
+
+/** 소수 둘째 자리까지 표기, 둘째 자리가 0이면 첫째 자리까지만 표기 */
+function formatPatientNumber(value: number): string {
+  if (!Number.isFinite(value)) return "-"
+  const rounded = Math.round(value * 100) / 100
+  const two = rounded.toFixed(2)
+  if (two.endsWith("0")) return rounded.toFixed(1)
+  return two
+}
+
+export default function RegimenConfirmPage() {
+  const router = useRouter()
+  const { regimenId, patient, doseOverrides, setDoseOverrides } = useFlow()
+  const regimen = findRegimen(regimenId)
+  const [hydrated, setHydrated] = useState(false)
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
+
+  useEffect(() => setHydrated(true), [])
+
+  useEffect(() => {
+    if (!hydrated) return
+    if (!regimen) router.replace("/")
+    else if (!isValidPatient(patient)) router.replace("/patient")
+  }, [hydrated, regimen, patient, router])
+
+  const lines = useMemo<AdjustedLine[]>(() => {
+    if (!isValidPatient(patient) || !regimenId) return []
+    const calc = computeCalc(patient)
+    return adjustRegimenLines(buildRegimenLines(regimenId, calc, doseOverrides), {
+      regimenId,
+      calc,
+    })
+  }, [patient, regimenId, doseOverrides])
+
+  if (!hydrated || !regimen || !isValidPatient(patient)) return null
+
+  const title = lines.find((l) => l.kind === "title")?.text ?? regimen.label
+
+  function updateDose(key: DoseKey, value: number) {
+    setDoseOverrides((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function toggle(id: string) {
+    setChecked((c) => ({ ...c, [id]: !c[id] }))
+  }
+
+  return (
+    <main className="min-h-dvh bg-background">
+      <div className="no-print">
+        <StepHeader current={3} />
+      </div>
+      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+        <div className="no-print mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-balance text-xl font-semibold text-foreground">레지멘 확인</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {patient.name ? `${patient.name} · ` : ""}
+              {regimen.label} · 빨간 값은 자동 계산치입니다. 용량 텍스트를 더블클릭하면 수정할 수 있습니다.
+            </p>
+          </div>
+        </div>
+
+        {/* Printable regimen document */}
+        <article className="print-area overflow-hidden rounded-xl border border-ocs-border bg-ocs-panel shadow-lg">
+          {/* Print-only header: 가운데 굵은 제목 + 제목 아래 우측 정렬 3줄 텍스트 (박스 없음) */}
+          <div className="print-only px-8 pt-6">
+            <h1 className="text-center text-lg font-bold text-ocs-header">{title}</h1>
+            {/* 제목과 환자정보 사이: 한 줄 */}
+            <div className="h-[1em]" aria-hidden="true" />
+            <PatientHeaderLines patient={patient} showAbw={regimenId !== "hdmel"} />
+            {/* 환자정보와 본문 사이: 두 줄 */}
+            <div className="h-[2em]" aria-hidden="true" />
+          </div>
+
+          <div className="regimen-scroll max-h-[62vh] overflow-y-auto px-6 py-6 sm:px-8">
+            {lines.map((line, i) => (
+              <RegimenLineRow
+                key={i}
+                line={line}
+                checked={line.id ? !!checked[line.id] : false}
+                checkedRight={line.idRight ? !!checked[line.idRight] : false}
+                onToggle={line.id ? () => toggle(line.id!) : undefined}
+                onToggleRight={line.idRight ? () => toggle(line.idRight!) : undefined}
+                onDoseChange={updateDose}
+              />
+            ))}
+          </div>
+        </article>
+
+        {/* Nav */}
+        <div className="no-print mt-8 flex items-center justify-between">
+          <button
+            onClick={() => router.push("/patient")}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            이전
+          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-muted"
+            >
+              <Printer className="h-4 w-4" />
+              출력
+            </button>
+            <button
+              onClick={() => router.push("/order")}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              다음
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+/** 제목 아래, 우측 정렬 3줄 (박스/보더 없음). ABW25는 showAbw가 true일 때만 표시 */
+function PatientHeaderLines({
+  patient,
+  showAbw,
+}: {
+  patient: { name: string; sex: "male" | "female"; heightCm: number; weightKg: number }
+  showAbw?: boolean
+}) {
+  const calc = computeCalc(patient)
+  return (
+    <div className="text-right text-sm leading-snug text-ocs-text">
+      <div>Actual BWT {formatPatientNumber(calc.tbw)} kg</div>
+      {showAbw && <div>ABW 25 {formatPatientNumber(calc.abw25)} kg</div>}
+      <div>BSA {formatPatientNumber(calc.bsa)} m²</div>
+    </div>
+  )
+}
+
+function RegimenLineRow({
+  line,
+  checked,
+  checkedRight,
+  onToggle,
+  onToggleRight,
+  onDoseChange,
+}: {
+  line: AdjustedLine
+  checked: boolean
+  checkedRight: boolean
+  onToggle?: () => void
+  onToggleRight?: () => void
+  onDoseChange: (key: DoseKey, value: number) => void
+}) {
+  const {
+    text,
+    segments,
+    annotation,
+    kind = "normal",
+    indent = 0,
+    checkbox,
+    checkboxRight,
+    printHidden,
+  } = line
+
+  if (kind === "spacer") return <div className="h-3" aria-hidden="true" />
+
+  const indentClass = indent === 2 ? "pl-8" : indent === 1 ? "pl-4" : ""
+
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-2 py-0.5 break-inside-avoid",
+        (kind === "title" || printHidden) && "print:hidden",
+      )}
+    >
+      {/* 체크박스 열: 항상 좌측 맨 앞 고정 정렬 (들여쓰기와 무관) */}
+      <span className="mt-[3px] flex w-4 shrink-0 justify-start">
+        {checkbox && <CheckBox checked={checked} onToggle={onToggle} />}
+      </span>
+
+      {/* 본문: 체크박스와 항상 같은 줄에서 시작 */}
+      <p
+        className={cn(
+          "flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
+          indentClass,
+          kind === "title" && "mb-1 text-base font-bold text-ocs-header",
+          kind === "section" && "mt-1 text-sm text-ocs-highlight",
+          kind === "sub" && "text-sm font-semibold",
+          kind === "normal" && "text-sm",
+        )}
+      >
+        {segments ? (
+          segments.map((seg, i) => <SegmentView key={i} seg={seg} onDoseChange={onDoseChange} />)
+        ) : (
+          <span>{text}</span>
+        )}
+        {/* 문장 끝 인라인 체크박스 (예: H2 blocker or PPI) */}
+        {checkboxRight && (
+          <CheckBox checked={checkedRight} onToggle={onToggleRight} className="ml-1" />
+        )}
+      </p>
+
+      {annotation && (
+        <span className="shrink-0 whitespace-nowrap font-mono text-sm font-semibold text-red-500">
+          {annotation}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function CheckBox({
+  checked,
+  onToggle,
+  className,
+}: {
+  checked: boolean
+  onToggle?: () => void
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={checked}
+      aria-label="오더 체크박스"
+      className={cn(
+        "not-italic inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-ocs-muted text-[10px] font-bold leading-none",
+        checked ? "bg-ocs-highlight text-white" : "bg-transparent text-transparent",
+        className,
+      )}
+    >
+      ✓
+    </button>
+  )
+}
+
+function SegmentView({
+  seg,
+  onDoseChange,
+}: {
+  seg: Segment
+  onDoseChange: (key: DoseKey, value: number) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  if (seg.dose) {
+    const { key, unit } = seg.dose
+    if (editing) {
+      const commit = () => {
+        const v = Number.parseFloat(draft)
+        if (!Number.isNaN(v) && v > 0) onDoseChange(key, v)
+        setEditing(false)
+      }
+      return (
+        <span className="not-italic inline-flex items-baseline">
+          <input
+            ref={inputRef}
+            type="number"
+            step="any"
+            defaultValue={seg.text}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              if (e.key === "Enter") commit()
+              if (e.key === "Escape") setEditing(false)
+            }}
+            className="w-16 rounded border border-ocs-highlight bg-ocs-panel px-1 py-0 font-mono text-sm text-ocs-text outline-none"
+            aria-label="용량 수정"
+          />
+          <span className="text-ocs-muted">{unit}</span>
+        </span>
+      )
+    }
+    return (
+      <button
+        type="button"
+        onDoubleClick={() => {
+          setDraft(seg.text)
+          setEditing(true)
+        }}
+        title="더블클릭하여 용량 수정"
+        className="not-italic rounded px-0.5 font-medium text-ocs-highlight underline decoration-dotted underline-offset-2 hover:bg-ocs-highlight/20"
+      >
+        {seg.text}
+        {unit}
+      </button>
+    )
+  }
+
+  return <span className={cn(seg.red && "font-semibold text-red-500")}>{seg.text}</span>
+}
+</file>
+
+<file path="lib/order-window.ts">
+import type { CalcResult } from "@/lib/calc"
+import type { DoseOverrides } from "@/lib/dose-overrides"
+import { buildRegimenLines, type RenderLine } from "@/lib/regimen-render"
+import {
+  getOrderMedsForDay,
+  getChemoStartMinutesForDay,
+  getHydrationTimes,
+  type OrderMedWithMeta,
+} from "@/lib/order-schedule"
+import { DEFAULT_SCHEDULE_SETTINGS, type ScheduleSettings } from "@/lib/schedule-settings"
+
+/**
+ * 오더창 = 레지멘 전문(기울임체) + 실제 처방 오더(정자 + 수행시간)
+ * 레지멘 라인 아래에 해당 라인에서 파생된 오더를 붙여서 렌더한다.
+ */
+export type OrderWindowRow =
+  | { kind: "regimen"; key: string; line: RenderLine }
+  | { kind: "med"; key: string; med: OrderMedWithMeta }
+
+/**
+ * 동의서 응답은 첫 항암 투약일에만 적용.
+ * 이후 날짜는 기본 시작시간 + 일자별 "항암제 당기기" 설정을 사용한다.
+ */
+export function effectiveSettings(
+  settings: ScheduleSettings,
+  day: number,
+  firstDay: number,
+): ScheduleSettings {
+  const pullForward = settings.pullForward ?? {}
+  void day
+  void firstDay
+  // 첫날 이후에도 동의서/시작시간 선택을 그대로 유지 → 전일 투약시간과 연동
+  return { ...settings, pullForward }
+}
+
+/* ------------------------------------------------------------------ *
+ * 기울임체 레지멘 텍스트 정리
+ *  얼음 / EKG / cc/hr 등 "오더 실행 정보"는 오더 행의 수행시간 옆에만 표기
+ * ------------------------------------------------------------------ */
+
+const STRIP_PATTERNS: RegExp[] = [
+  /\s*\(\s*얼음[^)]*\)/g,
+  /\s*\[\s*얼음[^\]]*\]/g,
+  /\s*,?\s*얼음\s*(\/\s*)?/g,
+  /\s*\(\s*EKG[^)]*\)/g,
+  /\s*,?\s*EKG\s*(monitoring)?/g,
+  /\s*\d+(\.\d+)?\s*~?\s*\d*\s*cc\/hr/g,
+]
+
+function stripOrderInfo(text: string): string {
+  let out = text
+  for (const re of STRIP_PATTERNS) out = out.replace(re, "")
+  return out.replace(/\s{2,}/g, " ").replace(/\s+([,.)])/g, "$1").trimEnd()
+}
+
+function sanitizeLine(line: RenderLine): RenderLine {
+  if (line.segments) {
+    const segments = line.segments
+      .map((s) => ({ ...s, text: stripOrderInfo(s.text) }))
+      .filter((s) => s.text.trim().length > 0)
+    return { ...line, segments }
+  }
+  if (line.text) return { ...line, text: stripOrderInfo(line.text) }
+  return line
+}
+
+/** med id → 레지멘 라인 매칭 키워드 */
+const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
+  { test: (id) => id.startsWith("thiotepa"), keywords: ["Thiotepa"] },
+  { test: (id) => id.startsWith("busulfan"), keywords: ["Busulfan"] },
+  { test: (id) => id.startsWith("levetiracetam 500mg"), keywords: ["Levetiracetam", "Keppra", "다음날 500mg PO"] },
+  { test: (id) => id.startsWith("levetiracetam 1g"), keywords: ["Levetiracetam 1500mg", "Keppra"] },
+  { test: (id) => id === "ptcy", keywords: ["PTCy", "Cyclophosphamide"] },
+  { test: (id) => id.startsWith("cyclophosphamide"), keywords: ["Cyclophosphamide"] },
+  { test: (id) => id.startsWith("palonosetron"), keywords: ["Palonosetron"]
+   },
+  { test: (id) => id.startsWith("granisetron-po"), keywords: ["Granisetron", "Serotonin antagnoist PO", "Serotonin antagonist PO"]},
+  { test: (id) => id.startsWith("aprepitant 125mg"), keywords: ["aprepitant 125mg", "Aprepitant 125mg"] },
+  { test: (id) => id.startsWith("aprepitant 80mg"), keywords: ["aprepitant 80mg", "Aprepitant 80mg"] },
+  {
+    test: (id) => id.startsWith("granisetron-iv"),
+    keywords: ["Granisetron", "Serotonin antagonist IV"],
+  },
+  { test: (id) => id.startsWith("mesna"), keywords: ["Mesna"] },
+  { test: (id) => id.startsWith("hyd"), keywords: ["hydration", "Hydration", "cc/hr"] },
+  { test: (id) => id.startsWith("hydration"), keywords: ["hydration", "Hydration"] },
+  { test: (id) => id.startsWith("furosemide 20mg"), keywords: ["furosemide 20mg", "Furosemide 20mg"] },
+  { test: (id) => id.startsWith("furosemide 10mg"), keywords: ["furosemide 10mg", "Furosemide 10mg"] },
+  { test: (id) => id === "urine-output", keywords: ["check urine output", "Check urine output"] },
+  { test: (id) => id.startsWith("citopcin"), keywords: ["Ciprofloxacin"] },
+  { test: (id) => id.startsWith("ursa"), keywords: ["UDCA"] },
+  { test: (id) => id.startsWith("mycamine"), keywords: ["Micafungin"] },
+  { test: (id) => id.startsWith("zyprexa"), keywords: ["Olanzapine"] },
+  { test: (id) => id.startsWith("melphalan"), keywords: ["Melphalan"] },
+  { test: (id) => id.startsWith("dexamethasone 12mg"), keywords: ["dexamethasone 12mg", "Dexamethasone 12mg"] },
+  { test: (id) => id.startsWith("dexamethasone 10mg"), keywords: ["dexamethasone 10mg", "Dexamethasone 10mg"] },
+  { test: (id) => id.startsWith("dexamethasone 8mg"), keywords: ["dexamethasone 8mg", "Dexamethasone 8mg"] },
+  { test: (id) => id.startsWith("fludarabine"), keywords: ["Fludarabine"] },
+  { test: (id) => id.startsWith("mtx"), keywords: ["MTX", "Methotrexate"] },
+  { test: (id) => id === "atg", keywords: ["ATG (Rabbit", "ATG"] },
+  { test: (id) => id.startsWith("mpred"), keywords: ["Methylprednisolone", "M-pred"] },
+  { test: (id) => id.startsWith("acetaminophen"), keywords: ["Acetaminophen"] },
+  { test: (id) => id.startsWith("chlorpheniramine"), keywords: ["Chlorpheniramine"] },
+  { test: (id) => id.startsWith("hydrocortisone"), keywords: ["Hydrocortisone"] },
+  { test: (id) => id.startsWith("tacrolimus"), keywords: ["Tacrolimus"] },
+  { test: (id) => id.startsWith("mmf"), keywords: ["MMF", "Mycophenolate"] },
+  { test: (id) => id.startsWith("stemcell"), keywords: ["Stem cell infusion"] },
+]
+
+function lineText(line: RenderLine): string {
+  if (line.segments) return line.segments.map((s) => s.text).join("")
+  return line.text ?? ""
+}
+
+function extractDoseText(line: RenderLine): string | undefined {
+  if (!line.segments) return undefined
+  const red = line.segments
+    .filter((s) => s.red && /\d/.test(s.text))
+    .map((s) => s.text.trim())
+    .join(" ")
+  const m = red.match(/\d+(\.\d+)?\s*(mg|g|mg\/m2|g\/m2|mg\/m²)/i)
+  return m ? m[0] : undefined
+}
+
+/** 항암제 라인 및 바로 아래 용매 라인에서 계산된 용매 용량(예: 300 mL) 추출 */
+function extractSolventDoseText(lines: RenderLine[], idx: number): string | undefined {
+  for (let i = idx; i <= idx + 3 && i < lines.length; i++) {
+    const line = lines[i]
+    if (!line) continue
+    const red = (line.segments ?? [])
+      .filter((s) => s.red)
+      .map((s) => s.text)
+      .join(" ")
+    const hit = red.match(/\d+(\.\d+)?\s*(mL|ml|cc)/)
+    if (hit) return hit[0]
+  }
+  return undefined
+}
+
+/** 레지멘 annotation(`240 cc/hr`)에서 hydration 속도 추출 */
+function extractRateNote(line: RenderLine | undefined): string | undefined {
+  const src = `${line?.annotation ?? ""} ${line ? lineText(line) : ""}`
+  const hit = src.match(/(\d+(\.\d+)?)\s*cc\/hr/i)
+  return hit ? `${hit[1]}cc/hr` : undefined
+}
+
+function anchorIndex(medId: string, lines: RenderLine[]): number {
+  const entry = ANCHORS.find((a) => a.test(medId))
+  if (!entry) return -1
+  for (const kw of entry.keywords) {
+    const idx = lines.findIndex((l) => (l.kind ?? "normal") !== "title" && lineText(l).includes(kw))
+    if (idx >= 0) return idx
+  }
+  return -1
+}
+
+export interface OrderWindowInput {
+  regimenId: string | null
+  day: number
+  days: number[]
+  calc: CalcResult
+  doseOverrides: DoseOverrides
+  settings: ScheduleSettings
+}
+
+export interface OrderWindow {
+  rows: OrderWindowRow[]
+  /** 해당 일자에 실제 처방되는 오더 */
+  meds: OrderMedWithMeta[]
+  /** 첫 항암 투약일인지 (동의서 질문 노출 조건) */
+  isFirstDay: boolean
+}
+
+export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
+  const { regimenId, day, days, calc, doseOverrides, settings } = input
+  const firstDay = days[0] ?? day
+  const isFirstDay = day === firstDay
+  const eff = effectiveSettings(settings, day, firstDay)
+
+  const lines = buildRegimenLines(regimenId, calc, doseOverrides).map(sanitizeLine)
+  const rawMeds = getOrderMedsForDay(regimenId, day, eff, days)
+
+  // 레지멘 라인에서 총 용량 추출 후 OrderMed에 주입
+  const meds = rawMeds.map((med) => {
+    const idx = anchorIndex(med.id, lines)
+    const line = idx >= 0 ? lines[idx] : undefined
+    const doseText = line ? extractDoseText(line) : undefined
+    const solventDoseText = idx >= 0 && med.solvent ? extractSolventDoseText(lines, idx) : undefined
+    const rateNote = med.id.startsWith("hyd") ? extractRateNote(line) : undefined
+    const defaultTimes =
+      rateNote && med.id.startsWith("hyd")
+        ? getHydrationTimes(Number.parseFloat(rateNote))
+        : med.defaultTimes
+    return { ...med, doseText, solventDoseText, rateNote, defaultTimes }
+  })
+
+
+  // 라인별 오더 그룹
+  const byIndex = new Map<number, OrderMedWithMeta[]>()
+  const unmatched: OrderMedWithMeta[] = []
+  for (const med of meds) {
+    const idx = anchorIndex(med.id, lines)
+    if (idx < 0) {
+      unmatched.push(med)
+      continue
+    }
+    const arr = byIndex.get(idx) ?? []
+    arr.push(med)
+    byIndex.set(idx, arr)
+  }
+
+  const rows: OrderWindowRow[] = []
+  lines.forEach((line, i) => {
+    rows.push({ kind: "regimen", key: `l${i}`, line })
+    if ((line.kind ?? "normal") === "spacer") return
+    for (const med of byIndex.get(i) ?? []) {
+      rows.push({ kind: "med", key: `m${i}-${med.id}`, med })
+    }
+  })
+  for (const med of unmatched) {
+    rows.push({ kind: "med", key: `mx-${med.id}`, med })
+  }
+
+  return { rows, meds, isFirstDay }
+}
+
+/* ------------------------------------------------------------------ *
+ * PRN order (모든 일자 공통)
+ * ------------------------------------------------------------------ */
+
+export interface PrnOrder {
+  id: string
+  name: string
+  detail: string
+  badge: "PRN" | "TIT" | "SUP"
+}
+
+export const PRN_ORDERS: PrnOrder[] = [
+  { id: "lasix", name: "Lasix inj 20mg (Furosemide)", detail: "20 mg [IV] prn", badge: "PRN" },
+  {
+    id: "chlorph-prn",
+    name: "Chlorpheniramine inj 4mg",
+    detail: "4 mg [IVS] prn",
+    badge: "PRN",
+  },
+  { id: "ns100", name: "0.9% NS 100ml", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "ns50", name: "0.9% NS 50ml", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "d5w50", name: "5% Dextrose 50mL", detail: "1 bag [IV] prn", badge: "SUP" },
+  { id: "d5w20", name: "5% Dextrose 20cc amp", detail: "1 amp [IV] prn", badge: "SUP" },
+]
+</file>
+
+<file path="lib/schedule-settings.ts">
+/** Chemo start time when consent form is received (11 A.M.) */
+export const CONSENT_YES_START = "11:00"
+
+/** Options when consent form is NOT received */
+export type NoConsentStart = "13:00" | "16:30" | "17:30"
+
+export const NO_CONSENT_OPTIONS: { value: NoConsentStart; label: string }[] = [
+  { value: "13:00", label: "1:00 P.M." },
+  { value: "16:30", label: "4:30 P.M." },
+  { value: "17:30", label: "5:30 P.M." },
+]
+
+/** 항암제 당기기 한도 (분) */
+export const CHEMO_PULL_MIN = 120
+/** Busulfan 포함 시 당기기 한도 (분) */
+export const BUSULFAN_PULL_MIN = 60
+
+export interface ScheduleSettings {
+  /** null = not yet answered (첫 항암 투약일 질문) */
+  consentReceived: boolean | null
+  /** Used when consentReceived === false */
+  noConsentStart: NoConsentStart
+  /** 첫 항암 투약일 이후 일자별 "항암제 당기기" 여부 */
+  pullForward: Record<number, boolean>
+}
+
+export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
+  consentReceived: null,
+  noConsentStart: "13:00",
+  pullForward: {},
+}
+
+/** 첫 항암제 투약 시작 시간 — 동의서 "아니오"면 선택한 시간을 그대로 사용 */
+export function getChemoStartTime(settings: ScheduleSettings): string {
+  if (settings.consentReceived === false) return settings.noConsentStart
+  return CONSENT_YES_START
+}
+
+/** 해당 일자에 당기기가 선택되었는지 */
+export function isPullForward(settings: ScheduleSettings, day: number): boolean {
+  return (settings.pullForward ?? {})[day] === true
+}
+
+/* ---------------- time utils (shared) ---------------- */
+
+export function toMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number)
+  return h * 60 + (m || 0)
+}
+
+export function fromMinutes(min: number): string {
+  const wrapped = ((min % 1440) + 1440) % 1440
+  const h = Math.floor(wrapped / 60)
+  const m = wrapped % 60
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+}
+
+/** 시작시간이 늦춰졌는지 여부 */
+export function isShifted(settings: ScheduleSettings): boolean {
+  return getChemoStartTime(settings) !== CONSENT_YES_START
+}
+
+/**
+ * BID oral (Citopcin 500mg bid).
+ * 기본 08:00 / 20:00
+ * 13:00 시작 → 12:00 / 22:00
+ * 16:30·17:30 시작 → 18:00 / 22:00
+ * ※ 첫 투약일이 아니면 당기기/동의서와 무관하게 기본값 사용
+ */
+export function getBidOralTimes(settings: ScheduleSettings, isFirstDay = true): string[] {
+  if (!isFirstDay) return ["08:00", "20:00"]
+  const start = getChemoStartTime(settings)
+  if (start === "13:00") return ["12:00", "22:00"]
+  if (start === "16:30" || start === "17:30") return ["18:00", "22:00"]
+  return ["08:00", "20:00"]
+}
+
+/**
+ * TID oral (Ursa 200mg tid).
+ * 기본 08:00 / 12:00 / 18:00
+ */
+export function getTidOralTimes(settings: ScheduleSettings, isFirstDay = true): string[] {
+  if (!isFirstDay) return ["08:00", "12:00", "18:00"]
+  const start = getChemoStartTime(settings)
+  if (start === "13:00") return ["12:00", "18:00", "22:00"]
+  if (start === "16:30" || start === "17:30") return ["18:00", "22:00"]
+  return ["08:00", "12:00", "18:00"]
+}
+
+/** 그 외 일반 PO (qd) 기본시간 → shift 시 재조정 (첫날만) */
+export function getQdOralTime(settings: ScheduleSettings, base = "08:00", isFirstDay = true): string {
+  if (!isFirstDay) return base
+  const start = getChemoStartTime(settings)
+  if (start === "13:00" && toMinutes(base) < toMinutes("12:00")) return "12:00"
+  if ((start === "16:30" || start === "17:30") && toMinutes(base) < toMinutes("18:00")) return "18:00"
+  return base
+}
+
+/** Mycamine 1일 1회: 16:00, 단 첫날에 늦은 시작이면 20:00 / 이튿날부터는 항상 16:00 */
+export function getMycamineTime(settings: ScheduleSettings, isFirstDay = true): string {
+  if (!isFirstDay) return "16:00"
+  const start = getChemoStartTime(settings)
+  return start === "16:30" || start === "17:30" ? "20:00" : "16:00"
+}
+
+export function describeStart(settings: ScheduleSettings): string {
+  const start = getChemoStartTime(settings)
+  if (settings.consentReceived === true) return `동의서 수령 · 첫 항암 ${start}`
+  if (settings.consentReceived === false) return `동의서 미수령 · 첫 항암 ${start}`
+  return `기본값 · 첫 항암 ${start}`
+}
+</file>
+
 <file path="app/order/page.tsx">
 "use client"
 
@@ -3238,321 +3667,6 @@ function ChoiceButton({
 }
 </file>
 
-<file path="app/regimen/page.tsx">
-"use client"
-
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
-import { ArrowLeft, ArrowRight, Printer } from "lucide-react"
-import { StepHeader } from "@/components/step-header"
-import { useFlow } from "@/contexts/flow-context"
-import { findRegimen } from "@/lib/regimens"
-import { computeCalc, isValidPatient } from "@/lib/calc"
-import { buildRegimenLines, type Segment } from "@/lib/regimen-render"
-import { adjustRegimenLines, type AdjustedLine } from "@/lib/regimen-adjust"
-import type { DoseKey } from "@/lib/dose-overrides"
-import { cn } from "@/lib/utils"
-
-/** 소수 둘째 자리까지 표기, 둘째 자리가 0이면 첫째 자리까지만 표기 */
-function formatPatientNumber(value: number): string {
-  if (!Number.isFinite(value)) return "-"
-  const rounded = Math.round(value * 100) / 100
-  const two = rounded.toFixed(2)
-  if (two.endsWith("0")) return rounded.toFixed(1)
-  return two
-}
-
-export default function RegimenConfirmPage() {
-  const router = useRouter()
-  const { regimenId, patient, doseOverrides, setDoseOverrides } = useFlow()
-  const regimen = findRegimen(regimenId)
-  const [hydrated, setHydrated] = useState(false)
-  const [checked, setChecked] = useState<Record<string, boolean>>({})
-
-  useEffect(() => setHydrated(true), [])
-
-  useEffect(() => {
-    if (!hydrated) return
-    if (!regimen) router.replace("/")
-    else if (!isValidPatient(patient)) router.replace("/patient")
-  }, [hydrated, regimen, patient, router])
-
-  const lines = useMemo<AdjustedLine[]>(() => {
-    if (!isValidPatient(patient) || !regimenId) return []
-    const calc = computeCalc(patient)
-    return adjustRegimenLines(buildRegimenLines(regimenId, calc, doseOverrides), {
-      regimenId,
-      calc,
-    })
-  }, [patient, regimenId, doseOverrides])
-
-  if (!hydrated || !regimen || !isValidPatient(patient)) return null
-
-  const title = lines.find((l) => l.kind === "title")?.text ?? regimen.label
-
-  function updateDose(key: DoseKey, value: number) {
-    setDoseOverrides((prev) => ({ ...prev, [key]: value }))
-  }
-
-  function toggle(id: string) {
-    setChecked((c) => ({ ...c, [id]: !c[id] }))
-  }
-
-  return (
-    <main className="min-h-dvh bg-background">
-      <div className="no-print">
-        <StepHeader current={3} />
-      </div>
-      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-        <div className="no-print mb-6 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-balance text-xl font-semibold text-foreground">레지멘 확인</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {patient.name ? `${patient.name} · ` : ""}
-              {regimen.label} · 빨간 값은 자동 계산치입니다. 용량 텍스트를 더블클릭하면 수정할 수 있습니다.
-            </p>
-          </div>
-        </div>
-
-        {/* Printable regimen document */}
-        <article className="print-area overflow-hidden rounded-xl border border-ocs-border bg-ocs-panel shadow-lg">
-          {/* Print-only header: 가운데 굵은 제목 + 제목 아래 우측 정렬 3줄 텍스트 (박스 없음) */}
-          <div className="print-only px-8 pt-6">
-            <h1 className="text-center text-lg font-bold text-ocs-header">{title}</h1>
-            {/* 제목과 환자정보 사이: 한 줄 */}
-            <div className="h-[1em]" aria-hidden="true" />
-            <PatientHeaderLines patient={patient} showAbw={regimenId !== "hdmel"} />
-            {/* 환자정보와 본문 사이: 두 줄 */}
-            <div className="h-[2em]" aria-hidden="true" />
-          </div>
-
-          <div className="regimen-scroll max-h-[62vh] overflow-y-auto px-6 py-6 sm:px-8">
-            {lines.map((line, i) => (
-              <RegimenLineRow
-                key={i}
-                line={line}
-                checked={line.id ? !!checked[line.id] : false}
-                checkedRight={line.idRight ? !!checked[line.idRight] : false}
-                onToggle={line.id ? () => toggle(line.id!) : undefined}
-                onToggleRight={line.idRight ? () => toggle(line.idRight!) : undefined}
-                onDoseChange={updateDose}
-              />
-            ))}
-          </div>
-        </article>
-
-        {/* Nav */}
-        <div className="no-print mt-8 flex items-center justify-between">
-          <button
-            onClick={() => router.push("/patient")}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            이전
-          </button>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-muted"
-            >
-              <Printer className="h-4 w-4" />
-              출력
-            </button>
-            <button
-              onClick={() => router.push("/order")}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-            >
-              다음
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-    </main>
-  )
-}
-
-/** 제목 아래, 우측 정렬 3줄 (박스/보더 없음). ABW25는 showAbw가 true일 때만 표시 */
-function PatientHeaderLines({
-  patient,
-  showAbw,
-}: {
-  patient: { name: string; sex: "male" | "female"; heightCm: number; weightKg: number }
-  showAbw?: boolean
-}) {
-  const calc = computeCalc(patient)
-  return (
-    <div className="text-right text-sm leading-snug text-ocs-text">
-      <div>Actual BWT {formatPatientNumber(calc.tbw)} kg</div>
-      {showAbw && <div>ABW 25 {formatPatientNumber(calc.abw25)} kg</div>}
-      <div>BSA {formatPatientNumber(calc.bsa)} m²</div>
-    </div>
-  )
-}
-
-function RegimenLineRow({
-  line,
-  checked,
-  checkedRight,
-  onToggle,
-  onToggleRight,
-  onDoseChange,
-}: {
-  line: AdjustedLine
-  checked: boolean
-  checkedRight: boolean
-  onToggle?: () => void
-  onToggleRight?: () => void
-  onDoseChange: (key: DoseKey, value: number) => void
-}) {
-  const {
-    text,
-    segments,
-    annotation,
-    kind = "normal",
-    indent = 0,
-    checkbox,
-    checkboxRight,
-    printHidden,
-  } = line
-
-  if (kind === "spacer") return <div className="h-3" aria-hidden="true" />
-
-  const indentClass = indent === 2 ? "pl-8" : indent === 1 ? "pl-4" : ""
-
-  return (
-    <div
-      className={cn(
-        "flex items-start gap-2 py-0.5 break-inside-avoid",
-        (kind === "title" || printHidden) && "print:hidden",
-      )}
-    >
-      {/* 체크박스 열: 항상 좌측 맨 앞 고정 정렬 (들여쓰기와 무관) */}
-      <span className="mt-[3px] flex w-4 shrink-0 justify-start">
-        {checkbox && <CheckBox checked={checked} onToggle={onToggle} />}
-      </span>
-
-      {/* 본문: 체크박스와 항상 같은 줄에서 시작 */}
-      <p
-        className={cn(
-          "flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
-          indentClass,
-          kind === "title" && "mb-1 text-base font-bold text-ocs-header",
-          kind === "section" && "mt-1 text-sm text-ocs-highlight",
-          kind === "sub" && "text-sm font-semibold",
-          kind === "normal" && "text-sm",
-        )}
-      >
-        {segments ? (
-          segments.map((seg, i) => <SegmentView key={i} seg={seg} onDoseChange={onDoseChange} />)
-        ) : (
-          <span>{text}</span>
-        )}
-        {/* 문장 끝 인라인 체크박스 (예: H2 blocker or PPI) */}
-        {checkboxRight && (
-          <CheckBox checked={checkedRight} onToggle={onToggleRight} className="ml-1" />
-        )}
-      </p>
-
-      {annotation && (
-        <span className="shrink-0 whitespace-nowrap font-mono text-sm font-semibold text-red-500">
-          {annotation}
-        </span>
-      )}
-    </div>
-  )
-}
-
-function CheckBox({
-  checked,
-  onToggle,
-  className,
-}: {
-  checked: boolean
-  onToggle?: () => void
-  className?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={checked}
-      aria-label="오더 체크박스"
-      className={cn(
-        "not-italic inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-ocs-muted text-[10px] font-bold leading-none",
-        checked ? "bg-ocs-highlight text-white" : "bg-transparent text-transparent",
-        className,
-      )}
-    >
-      ✓
-    </button>
-  )
-}
-
-function SegmentView({
-  seg,
-  onDoseChange,
-}: {
-  seg: Segment
-  onDoseChange: (key: DoseKey, value: number) => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState("")
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus()
-  }, [editing])
-
-  if (seg.dose) {
-    const { key, unit } = seg.dose
-    if (editing) {
-      const commit = () => {
-        const v = Number.parseFloat(draft)
-        if (!Number.isNaN(v) && v > 0) onDoseChange(key, v)
-        setEditing(false)
-      }
-      return (
-        <span className="not-italic inline-flex items-baseline">
-          <input
-            ref={inputRef}
-            type="number"
-            step="any"
-            defaultValue={seg.text}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) return
-              if (e.key === "Enter") commit()
-              if (e.key === "Escape") setEditing(false)
-            }}
-            className="w-16 rounded border border-ocs-highlight bg-ocs-panel px-1 py-0 font-mono text-sm text-ocs-text outline-none"
-            aria-label="용량 수정"
-          />
-          <span className="text-ocs-muted">{unit}</span>
-        </span>
-      )
-    }
-    return (
-      <button
-        type="button"
-        onDoubleClick={() => {
-          setDraft(seg.text)
-          setEditing(true)
-        }}
-        title="더블클릭하여 용량 수정"
-        className="not-italic rounded px-0.5 font-medium text-ocs-highlight underline decoration-dotted underline-offset-2 hover:bg-ocs-highlight/20"
-      >
-        {seg.text}
-        {unit}
-      </button>
-    )
-  }
-
-  return <span className={cn(seg.red && "font-semibold text-red-500")}>{seg.text}</span>
-}
-</file>
-
 <file path="components/order-med-row.tsx">
 "use client"
 
@@ -3583,81 +3697,92 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
         alt ? "bg-ocs-row-alt" : "bg-ocs-row",
       )}
     >
+      {/* 본 오더 + 용매 줄만 묶음 대괄호로 감싼다 (+1 행은 제외) */}
       <div className={cn(bundled && "relative")}>
-      {bundled && <BundleBracket />}
+        {bundled && <BundleBracket />}
 
-      <div className={cn("grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5", bundled && "pl-6")}>
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
-            {med.lastOralDose && <HoldIcon />}
-            {med.sup && <Badge kind="SUP" />}
-            <span className="truncate">{med.name}</span>
-            {med.doseText && (
-              <span className="whitespace-nowrap text-red-500 print:text-red-600">{med.doseText}</span>
-            )}
-          </p>
-          <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
-          {med.note && <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>}
-        </div>
-
-        <div className="shrink-0 text-right">
-          {med.scheduleKind === "thiotepa" ? (
-            <SelectTime med={med} times={times} onChange={onChange} />
-          ) : med.scheduleKind === "citopcin" ? (
-            <EditableTime
-              times={times}
-              options={[
-                { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
-                { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
-              ]}
-            />
-          ) : med.scheduleKind === "ursa" ? (
-            <EditableTime
-              times={times}
-              options={[
-                { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
-                { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
-              ]}
-            />
-          ) : (
-            <FixedTime
-              times={times}
-              suffix={med.suffix}
-              timeNote={med.timeNote}
-              solo={med.solo}
-              highlight={med.scheduleKind === "chemo"}
-              rateNote={med.rateNote}
-              endMark={med.endMark}
-            />
+        <div
+          className={cn(
+            "grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5",
+            bundled && "pl-6",
           )}
-        </div>
-      </div>
-
-      {/* 용매 줄 — 수행시간 없음 */}
-      {med.solvent && (
-        <div className="grid grid-cols-[1fr_auto] items-start gap-4 px-3 pb-1.5 pl-6">
-          <p className="truncate text-[13px] not-italic text-ocs-text">
-            {med.solvent}
-            {med.solventDoseText && (
-              <span className="ml-1 whitespace-nowrap text-red-500 print:text-red-600">
-                {med.solventDoseText}
-              </span>
+        >
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
+              {med.lastOralDose && <HoldIcon />}
+              {med.sup && <Badge kind="SUP" />}
+              <span className="truncate">{med.name}</span>
+              {med.doseText && (
+                <span className="whitespace-nowrap text-red-500 print:text-red-600">
+                  {med.doseText}
+                </span>
+              )}
+            </p>
+            <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
+            {med.note && (
+              <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>
             )}
-          </p>
-          <span aria-hidden="true" />
-        </div>
-      )}
+          </div>
 
+          <div className="shrink-0 text-right">
+            {med.scheduleKind === "thiotepa" ? (
+              <SelectTime med={med} times={times} onChange={onChange} />
+            ) : med.scheduleKind === "citopcin" ? (
+              <EditableTime
+                times={times}
+                options={[
+                  { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
+                  { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
+                ]}
+              />
+            ) : med.scheduleKind === "ursa" ? (
+              <EditableTime
+                times={times}
+                options={[
+                  { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
+                  { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
+                ]}
+              />
+            ) : (
+              <FixedTime
+                times={times}
+                suffix={med.suffix}
+                timeNote={med.timeNote}
+                solo={med.solo}
+                highlight={med.scheduleKind === "chemo"}
+                rateNote={med.rateNote}
+                endMark={med.endMark}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* 용매 줄 — 수행시간 없음 */}
+        {med.solvent && (
+          <div className="grid grid-cols-[1fr_auto] items-start gap-4 px-3 pb-1.5 pl-6">
+            <p className="truncate text-[13px] not-italic text-ocs-text">
+              {med.solvent}
+              {med.solventDoseText && (
+                <span className="ml-1 whitespace-nowrap text-red-500 print:text-red-600">
+                  {med.solventDoseText}
+                </span>
+              )}
+            </p>
+            <span aria-hidden="true" />
+          </div>
+        )}
       </div>
 
-      {/* 첫 투약 — +1 오더 (스케줄링 없음) */}
+      {/* 첫 투약 — +1 오더 (스케줄링 없음, 묶음 밖) */}
       {med.firstDose && (
         <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-ocs-border/60 px-3 py-1.5">
           <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
             <PlusOneIcon />
             <span className="truncate">{med.name}</span>
             {med.doseText && (
-              <span className="whitespace-nowrap text-red-500 print:text-red-600">{med.doseText}</span>
+              <span className="whitespace-nowrap text-red-500 print:text-red-600">
+                {med.doseText}
+              </span>
             )}
           </p>
           <span aria-hidden="true" />
@@ -3744,6 +3869,11 @@ function FixedTime({
         {endMark && <span className="ml-1 text-ocs-text">(end)</span>}
       </span>
       {solo && <span className="ml-1 text-ocs-muted">(단독)</span>}
+      {suffix && <span className="ml-1 text-ocs-highlight">({suffix})</span>}
+      {timeNote && <span className="ml-1 text-ocs-highlight/80">({timeNote})</span>}
+    </span>
+  )
+}
 
 function SelectTime({
   med,
@@ -3773,7 +3903,9 @@ function SelectTime({
         <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ocs-muted" />
       </div>
       {med.suffix && (
-        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight">({med.suffix})/</span>
+        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight">
+          ({med.suffix})/
+        </span>
       )}
       {med.timeNote && (
         <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight/80">
@@ -3847,6 +3979,67 @@ function useOutsideClose(onClose: () => void) {
     return () => document.removeEventListener("mousedown", handler)
   }, [onClose])
   return ref
+}
+</file>
+
+<file path="lib/dose-overrides.ts">
+/** Per-regimen editable chemotherapy dose keys */
+export type DoseKey =
+  | "thiotepa_mg_m2"
+  | "busulfan_mg_kg"
+  | "cyclo_mg_kg"
+  | "melphalan_mg_m2"
+  | "fludarabine_mg_m2"
+  | "atg_mg_kg"
+  | "mpred_mg_kg"
+  | "mtx_mg_m2"
+  | "ptcy_mg_kg"
+  | "conditioning_cyclo_mg_kg"
+  | "mmf_mg_kg"
+
+export type DoseOverrides = Partial<Record<DoseKey, number>>
+
+export const DEFAULT_DOSES: Record<string, Partial<Record<DoseKey, number>>> = {
+  thiobucy: {
+    thiotepa_mg_m2: 200,
+    busulfan_mg_kg: 3.2,
+    cyclo_mg_kg: 60,
+  },
+  hdmel: {
+    // 100 mg/m² × D-3, D-2
+    melphalan_mg_m2: 100,
+  },
+  buflubatg: {
+    busulfan_mg_kg: 3.2,
+    fludarabine_mg_m2: 40,
+    // 1.5 for matched related; 2.5 for unrelated/mismatched (default unrelated)
+    atg_mg_kg: 2.5,
+    mpred_mg_kg: 1,
+    mtx_mg_m2: 15,
+  },
+  "buflu-ptcy": {
+    busulfan_mg_kg: 3.2,
+    // Busulfan/Fludarabine-PTCy [MAC]: Fludarabine 25 mg/m²
+    fludarabine_mg_m2: 25,
+    conditioning_cyclo_mg_kg: 14.5,
+    ptcy_mg_kg: 50,
+    mmf_mg_kg: 15,
+  },
+}
+
+export function getDose(regimenId: string, key: DoseKey, overrides: DoseOverrides): number {
+  if (overrides[key] != null) return overrides[key]!
+  return DEFAULT_DOSES[regimenId]?.[key] ?? 0
+}
+
+export function mergeDoseOverrides(regimenId: string, overrides: DoseOverrides): Record<DoseKey, number> {
+  const defaults = DEFAULT_DOSES[regimenId] ?? {}
+  const keys = new Set([...Object.keys(defaults), ...Object.keys(overrides)]) as Set<DoseKey>
+  const out = {} as Record<DoseKey, number>
+  for (const k of keys) {
+    out[k] = getDose(regimenId, k, overrides)
+  }
+  return out
 }
 </file>
 
@@ -3972,176 +4165,6 @@ export interface OrderMed {
 }
 </file>
 
-<file path="lib/schedule-settings.ts">
-/** Chemo start time when consent form is received (11 A.M.) */
-export const CONSENT_YES_START = "11:00"
-
-/** Options when consent form is NOT received */
-export type NoConsentStart = "13:00" | "16:30" | "17:30"
-
-export const NO_CONSENT_OPTIONS: { value: NoConsentStart; label: string }[] = [
-  { value: "13:00", label: "1:00 P.M." },
-  { value: "16:30", label: "4:30 P.M." },
-  { value: "17:30", label: "5:30 P.M." },
-]
-
-/** 항암제 당기기 한도 (분) */
-export const CHEMO_PULL_MIN = 120
-/** Busulfan 포함 시 당기기 한도 (분) */
-export const BUSULFAN_PULL_MIN = 60
-
-export interface ScheduleSettings {
-  /** null = not yet answered (첫 항암 투약일 질문) */
-  consentReceived: boolean | null
-  /** Used when consentReceived === false */
-  noConsentStart: NoConsentStart
-  /** 첫 항암 투약일 이후 일자별 "항암제 당기기" 여부 */
-  pullForward: Record<number, boolean>
-}
-
-export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
-  consentReceived: null,
-  noConsentStart: "13:00",
-  pullForward: {},
-}
-
-/** 첫 항암제 투약 시작 시간 — 동의서 "아니오"면 선택한 시간을 그대로 사용 */
-export function getChemoStartTime(settings: ScheduleSettings): string {
-  if (settings.consentReceived === false) return settings.noConsentStart
-  return CONSENT_YES_START
-}
-
-/** 해당 일자에 당기기가 선택되었는지 */
-export function isPullForward(settings: ScheduleSettings, day: number): boolean {
-  return (settings.pullForward ?? {})[day] === true
-}
-
-/* ---------------- time utils (shared) ---------------- */
-
-export function toMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number)
-  return h * 60 + (m || 0)
-}
-
-export function fromMinutes(min: number): string {
-  const wrapped = ((min % 1440) + 1440) % 1440
-  const h = Math.floor(wrapped / 60)
-  const m = wrapped % 60
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
-}
-
-/** 시작시간이 늦춰졌는지 여부 */
-export function isShifted(settings: ScheduleSettings): boolean {
-  return getChemoStartTime(settings) !== CONSENT_YES_START
-}
-
-/**
- * BID oral (Citopcin 500mg bid).
- * 기본 08:00 / 20:00
- * 13:00 시작 → 12:00 / 22:00
- * 16:30·17:30 시작 → 18:00 / 22:00
- */
-export function getBidOralTimes(settings: ScheduleSettings): string[] {
-  const start = getChemoStartTime(settings)
-  if (start === "13:00") return ["12:00", "22:00"]
-  if (start === "16:30" || start === "17:30") return ["18:00", "22:00"]
-  return ["08:00", "20:00"]
-}
-
-/**
- * TID oral (Ursa 200mg tid).
- * 기본 08:00 / 12:00 / 18:00
- */
-export function getTidOralTimes(settings: ScheduleSettings): string[] {
-  const start = getChemoStartTime(settings)
-  if (start === "13:00") return ["12:00", "18:00", "22:00"]
-  if (start === "16:30" || start === "17:30") return ["18:00", "22:00"]
-  return ["08:00", "12:00", "18:00"]
-}
-
-/** 그 외 일반 PO (qd) 기본시간 → shift 시 재조정 */
-export function getQdOralTime(settings: ScheduleSettings, base = "08:00"): string {
-  const start = getChemoStartTime(settings)
-  if (start === "13:00" && toMinutes(base) < toMinutes("12:00")) return "12:00"
-  if ((start === "16:30" || start === "17:30") && toMinutes(base) < toMinutes("18:00")) return "18:00"
-  return base
-}
-
-/** Mycamine 1일 1회: 16:00, 단 늦은 시작이면 20:00 */
-export function getMycamineTime(settings: ScheduleSettings): string {
-  const start = getChemoStartTime(settings)
-  return start === "16:30" || start === "17:30" ? "20:00" : "16:00"
-}
-
-export function describeStart(settings: ScheduleSettings): string {
-  const start = getChemoStartTime(settings)
-  if (settings.consentReceived === true) return `동의서 수령 · 첫 항암 ${start}`
-  if (settings.consentReceived === false) return `동의서 미수령 · 첫 항암 ${start}`
-  return `기본값 · 첫 항암 ${start}`
-}
-</file>
-
-<file path="lib/dose-overrides.ts">
-/** Per-regimen editable chemotherapy dose keys */
-export type DoseKey =
-  | "thiotepa_mg_m2"
-  | "busulfan_mg_kg"
-  | "cyclo_mg_kg"
-  | "melphalan_mg_m2"
-  | "fludarabine_mg_m2"
-  | "atg_mg_kg"
-  | "mpred_mg_kg"
-  | "mtx_mg_m2"
-  | "ptcy_mg_kg"
-  | "conditioning_cyclo_mg_kg"
-  | "mmf_mg_kg"
-
-export type DoseOverrides = Partial<Record<DoseKey, number>>
-
-export const DEFAULT_DOSES: Record<string, Partial<Record<DoseKey, number>>> = {
-  thiobucy: {
-    thiotepa_mg_m2: 200,
-    busulfan_mg_kg: 3.2,
-    cyclo_mg_kg: 60,
-  },
-  hdmel: {
-    // 100 mg/m² × D-3, D-2
-    melphalan_mg_m2: 100,
-  },
-  buflubatg: {
-    busulfan_mg_kg: 3.2,
-    fludarabine_mg_m2: 40,
-    // 1.5 for matched related; 2.5 for unrelated/mismatched (default unrelated)
-    atg_mg_kg: 2.5,
-    mpred_mg_kg: 1,
-    mtx_mg_m2: 15,
-  },
-  "buflu-ptcy": {
-    busulfan_mg_kg: 3.2,
-    // Busulfan/Fludarabine-PTCy [MAC]: Fludarabine 25 mg/m²
-    fludarabine_mg_m2: 25,
-    conditioning_cyclo_mg_kg: 14.5,
-    ptcy_mg_kg: 50,
-    mmf_mg_kg: 15,
-  },
-}
-
-export function getDose(regimenId: string, key: DoseKey, overrides: DoseOverrides): number {
-  if (overrides[key] != null) return overrides[key]!
-  return DEFAULT_DOSES[regimenId]?.[key] ?? 0
-}
-
-export function mergeDoseOverrides(regimenId: string, overrides: DoseOverrides): Record<DoseKey, number> {
-  const defaults = DEFAULT_DOSES[regimenId] ?? {}
-  const keys = new Set([...Object.keys(defaults), ...Object.keys(overrides)]) as Set<DoseKey>
-  const out = {} as Record<DoseKey, number>
-  for (const k of keys) {
-    out[k] = getDose(regimenId, k, overrides)
-  }
-  return out
-}
-</file>
-
 <file path="lib/order-schedule.ts">
 import type { OrderMed } from "@/lib/regimens"
 import {
@@ -4192,8 +4215,16 @@ type TimeRule =
   | { type: "antiemetic-iv" }
   /** 첫 항암제 기준 상대시간 (Emend 125mg 등) */
   | { type: "pre-chemo"; offsetMin: number }
-  /** 특정 약제 기준 상대시간 (음수 = 이전) */
-  | { type: "relative"; ref: string; offsetMin: number; repeatEveryMin?: number; count?: number }
+    /** 특정 약제 기준 상대시간 (음수 = 이전) */
+  | {
+      type: "relative"
+      ref: string
+      offsetMin: number
+      repeatEveryMin?: number
+      count?: number
+      /** 가능한 한 정시로 스냅 */
+      snapHour?: boolean
+    }
   /** Cyclophosphamide 기준 -30분부터 q6hr */
   | { type: "mesna"; ref: string }
   /** 고정 시간 (shift 영향 없음) */
@@ -4202,11 +4233,15 @@ type TimeRule =
   | { type: "oral"; freq: "bid" | "tid" | "qd"; base?: string }
   /** Mycamine */
   | { type: "mycamine" }
-  /** 수액 교환 (rate 기반 grid) */
+  /** 수액 교환 (rate 기반 grid, 1 bag = 1000mL 기준) */
   | { type: "hydration"; rateCcHr: number }
+  /** Melphalan 기준 hydration (−6hr~+12hr 고속, 그 외 저속) */
+  | { type: "melphalan-hydration"; ref: string; fastRate: number; slowRate: number }
+  /** Keppra bid — busulfan 있는 날은 1g과 같은 시각(정시 스냅), 그 외 08:00/20:00 */
+  | { type: "keppra-bid"; ref: string }
   /** PRN */
   | { type: "prn" }
-  /** 시간 선택 드롭다운 (Thiotepa / MTX D1) */
+  /** 시간 선택 드롭다운 (MTX D1 등) */
   | { type: "select"; options: string[]; defaultTime: string }
 
 interface MedDef {
@@ -4255,17 +4290,70 @@ const D5W200 = "Dextrose 5% 200mL bag 중외      1 bag  [IV]  <Mix>  x1"
  * Time helpers
  * ------------------------------------------------------------------ */
 
-export function getHydrationTimes(rateCcHr: number): string[] {
-  const hoursPerBag = 1000 / rateCcHr
-  const snap = Math.round(hoursPerBag / 2) * 2
-  const interval = Math.max(4, Math.min(8, snap))
-  const anchors: Record<number, number[]> = {
-    4: [0, 4, 8, 12, 16, 20],
-    6: [0, 6, 12, 18],
-    8: [0, 8, 16],
-  }
-  return (anchors[interval] ?? anchors[6]!).map((h) => fromMinutes(h * 60))
+/** 1 bag = 1000mL 기준 교환 간격(분), 정시 단위로 반올림 */
+export function getBagIntervalMin(rateCcHr: number, bagMl = 1000): number {
+  return Math.max(60, Math.round(bagMl / rateCcHr) * 60)
 }
+
+const floorHour = (min: number) => Math.floor(min / 60) * 60
+/** 최대한 정시로 맞춤 */
+export const snapToHour = (min: number) => Math.round(min / 60) * 60
+
+export function getHydrationTimes(rateCcHr: number): string[] {
+  const interval = getBagIntervalMin(rateCcHr)
+  const out: string[] = []
+  for (let t = 0; t < 1440; t += interval) out.push(fromMinutes(t))
+  return out
+}
+
+/**
+ * Melphalan hydration
+ *  - MEL −6hr ~ +12hr : fastRate (기본 250 cc/hr)
+ *  - 그 외 구간        : slowRate (기본 75 cc/hr)
+ *  - 교환 간격은 1000mL / 속도 (250 → 4hr, 75 → 13hr), 교환시간은 정시로 스냅
+ *  - 전일 melphalan 이 있으면 그 타임라인을 이어서 당일 00:00 부터 생성
+ */
+export function getMelphalanHydrationTimes(
+  melMinToday: number | null,
+  melMinPrevDay: number | null,
+  fastRate = 250,
+  slowRate = 75,
+): string[] {
+  const doses: number[] = []
+  if (melMinPrevDay != null) doses.push(melMinPrevDay - 1440)
+  if (melMinToday != null) doses.push(melMinToday)
+  if (doses.length === 0) return []
+
+  const fastStep = getBagIntervalMin(fastRate)
+  const slowStep = getBagIntervalMin(slowRate)
+  const fastRanges = doses.map((d) => ({ s: floorHour(d - 360), e: floorHour(d + 720) }))
+
+  const pts: { at: number; rate: number }[] = []
+  let t = Math.min(...fastRanges.map((r) => r.s), -1440)
+  for (let guard = 0; t < 1440 && guard < 400; guard++) {
+    const fast = fastRanges.find((r) => t >= r.s && t < r.e)
+    const rate = fast ? fastRate : slowRate
+    pts.push({ at: t, rate })
+    const next = t + (fast ? fastStep : slowStep)
+    const nextFastStart = fastRanges
+      .map((r) => r.s)
+      .filter((s) => s > t && s < next)
+      .sort((a, b) => a - b)[0]
+    t = fast && fast.e < next ? fast.e : (nextFastStart ?? next)
+  }
+
+  const today = pts.filter((p) => p.at >= 0 && p.at < 1440)
+  const before = pts.filter((p) => p.at < 0).pop()
+  if (before && (today.length === 0 || today[0]!.at > 0)) today.unshift({ at: 0, rate: before.rate })
+
+  return today.map((p, i) => {
+    const prev = i === 0 ? null : today[i - 1]!.rate
+    if (i === 0) return `${fromMinutes(p.at)}(${p.rate}cc/hr)`
+    if (prev !== p.rate) return `${fromMinutes(p.at)}(${p.rate}cc/hr 속변)`
+    return fromMinutes(p.at)
+  })
+}
+
 
 /** Mesna q6hr — CTX 시작 30분 전부터 6시간 간격 4회 (24시 넘으면 익일 표기) */
 export function getMesnaTimes(ctxStartMin: number): string[] {
@@ -4298,7 +4386,7 @@ const THIOBUCY_MEDS: MedDef[] = [
     firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
   },
-  {
+   {
     id: "thiotepa",
     name: "Tepadina inj (Thiotepa)",
     detail: "[IV] <Mix> x1 · miv over 60min",
@@ -4306,11 +4394,7 @@ const THIOBUCY_MEDS: MedDef[] = [
     suffix: "F/ov1h",
     days: [-8, -7, -6],
     sort: 10,
-    rule: {
-      type: "select",
-      defaultTime: "11:00",
-      options: ["11:00", "12:00", "13:00", "14:00", "15:00", "16:30", "17:30", "18:30"],
-    },
+    rule: { type: "chemo", durationMin: 60 },
   },
   {
     id: "busulfan",
@@ -4329,17 +4413,16 @@ const THIOBUCY_MEDS: MedDef[] = [
     oral: true,
     days: [-5],
     sort: 60,
-    rule: { type: "oral", freq: "qd" },
+    rule: { type: "relative", ref: "busulfan", offsetMin: -210, snapHour: true },
   },
   {
     id: "levetiracetam 500mg",
     name: "Levetiracetam 500mg tab (Keppra)",
     detail: "[P.O] · Sz prophylaxis",
     oral: true,
-    noHoldLast: true,
     days: [-5, -4, -3],
     sort: 60,
-    rule: { type: "oral", freq: "bid" },
+    rule: { type: "keppra-bid", ref: "busulfan" },
   },
   {
     id: "cyclophosphamide",
@@ -4523,19 +4606,18 @@ const HDMEL_MEDS: MedDef[] = [
     sort: 6,
     rule: { type: "pre-chemo", offsetMin: -30 },
   },
-  {
+   {
     id: "hyd-pre-mel",
     name: "Dextrose 5% Na K2 1L bag(D5WNa77K20)",
     detail: "[IV] 250ch MEL -6hr ~ +12hr, in the meantime 75ch",
     sup: true,
-    timeNote: "250 cc/hr",
     note: "",
-    days: [-3, -2],
+    days: [-3, -2, -1],
     sort: 80,
-    rule: { type: "relative", ref: "melphalan", offsetMin: -360, repeatEveryMin: 240, count: 3 },
+    rule: { type: "melphalan-hydration", ref: "melphalan", fastRate: 250, slowRate: 75 },
   },
   {
-    id: "furosemide-mel",
+    id: "furosemide 20mg",
     name: "Lasix 20mg/2ml inj(Furosemide)",
     detail: "[IVS] · +1hr after Mel",
     suffix: "MEL+1h",
@@ -4575,6 +4657,7 @@ const HDMEL_MEDS: MedDef[] = [
     id: "stemcell-premed",
     name: "Chlorepheniramine meleate 4mg/2ml inj유한",
     detail: "1 amp(2 mL) [IV] x1",
+    timeNote: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "fixed", times: ["14:00"] },
@@ -4623,7 +4706,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
     note: "Busulfan 3–4시간 전 loading 1500mg (D-6), 이후 500mg bid",
     days: [-6, -5, -4, -3, -2],
     sort: 60,
-    rule: { type: "oral", freq: "bid" },
+    rule: { type: "keppra-bid", ref: "busulfan-batg" },
   },
   {
     id: "granisetron-batg",
@@ -4764,6 +4847,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
     id: "stemcell-premed-allo",
     name: "Chlorepheniramine meleate 4mg/2ml inj유한",
     detail: "1 amp(2 mL) [IV] x1",
+    timeNote: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "fixed", times: ["17:00"] },
@@ -4802,7 +4886,7 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     oral: true,
     days: [-6, -5, -4, -3, -2],
     sort: 60,
-    rule: { type: "oral", freq: "bid" },
+    rule: { type: "keppra-bid", ref: "busulfan-ptcy" },
   },
   {
     id: "granisetron-ptcy",
@@ -5048,8 +5132,10 @@ function scheduleChemo(
 function resolveTimes(
   med: MedDef,
   anchors: Record<string, number>,
+  previousAnchors: Record<string, number>,
   firstChemo: number,
   settings: ScheduleSettings,
+  isFirstDoseDay: boolean,
 ): string[] {
   const rule = med.rule
   switch (rule.type) {
@@ -5066,7 +5152,10 @@ function resolveTimes(
       if (base == null) return []
       const count = rule.count ?? 1
       const step = rule.repeatEveryMin ?? 0
-      return Array.from({ length: count }, (_, i) => fromMinutes(base + rule.offsetMin + i * step))
+      return Array.from({ length: count }, (_, i) => {
+        const time = base + rule.offsetMin + i * step
+        return fromMinutes(rule.snapHour ? snapToHour(time) : time)
+      })
     }
     case "mesna": {
       const base = anchors[rule.ref]
@@ -5076,13 +5165,26 @@ function resolveTimes(
     case "fixed":
       return rule.times
     case "oral":
-      if (rule.freq === "bid") return getBidOralTimes(settings)
-      if (rule.freq === "tid") return getTidOralTimes(settings)
-      return [getQdOralTime(settings, rule.base)]
+      if (rule.freq === "bid") return getBidOralTimes(settings, isFirstDoseDay)
+      if (rule.freq === "tid") return getTidOralTimes(settings, isFirstDoseDay)
+      return [getQdOralTime(settings, rule.base, isFirstDoseDay)]
     case "mycamine":
-      return [getMycamineTime(settings)]
+      return [getMycamineTime(settings, isFirstDoseDay)]
     case "hydration":
       return getHydrationTimes(rule.rateCcHr)
+    case "melphalan-hydration":
+      return getMelphalanHydrationTimes(
+        anchors[rule.ref] ?? null,
+        previousAnchors[rule.ref] ?? null,
+        rule.fastRate,
+        rule.slowRate,
+      )
+    case "keppra-bid": {
+      const busulfan = anchors[rule.ref]
+      if (busulfan == null) return ["08:00", "20:00"]
+      const first = snapToHour(busulfan - 210)
+      return [fromMinutes(first), fromMinutes(first + 720)]
+    }
     case "prn":
       return ["PRN"]
   }
@@ -5128,11 +5230,28 @@ export function getOrderMedsForDay(
   const startMin = hasMixPriority ? Math.max(rawStart, 11 * 60 + 30) : rawStart
   const { at: anchors, firstStart } = scheduleChemo(todays, startMin)
 
+  const previousDay = day - 1
+  const previousMeds = all.filter((m) => m.days.includes(previousDay))
+  const previousRawStart = getChemoStartMinutesForDay(
+    regimenId,
+    previousDay,
+    dayList,
+    settings,
+  )
+  const previousHasMixPriority = previousMeds.some(
+    (m) => /^(mesna|mpred|dexamethasone)/.test(m.id) && (m.solvent ?? "").includes("<Mix>"),
+  )
+  const previousStart = previousHasMixPriority
+    ? Math.max(previousRawStart, 11 * 60 + 30)
+    : previousRawStart
+  const { at: previousAnchors } = scheduleChemo(previousMeds, previousStart)
+
   return todays
     .slice()
     .sort((a, b) => (a.sort ?? 50) - (b.sort ?? 50))
     .map((m) => {
       const sortedDays = m.days.slice().sort((x, y) => x - y)
+      const isFirstDoseDay = day === sortedDays[0]
       return {
         id: m.id,
         name: m.name,
@@ -5156,7 +5275,14 @@ export function getOrderMedsForDay(
           day === sortedDays[sortedDays.length - 1],
         endMark: m.noHoldLast === true && day === sortedDays[sortedDays.length - 1],
         scheduleKind: displayKind(m),
-        defaultTimes: resolveTimes(m, anchors, firstStart, settings),
+        defaultTimes: resolveTimes(
+          m,
+          anchors,
+          previousAnchors,
+          firstStart,
+          settings,
+          isFirstDoseDay,
+        ),
         timeOptions: m.rule.type === "select" ? m.rule.options : undefined,
       }
     })

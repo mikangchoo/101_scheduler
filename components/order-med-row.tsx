@@ -142,13 +142,14 @@ function PlusOneIcon() {
 }
 
 /** 경구약 마지막 투약 조제유보 아이콘 */
+/** 경구약 마지막 투약 조제유보 아이콘 */
 function HoldIcon() {
   return (
     <span
       title="조제유보"
-      className="not-italic rounded-sm border border-ocs-text/60 bg-transparent px-1 py-[1px] text-[10px] font-bold leading-none text-ocs-text"
+      className="not-italic rounded-sm bg-pink-500 px-1 py-[1px] text-[10px] font-bold leading-none text-white"
     >
-      유보
+      조제유보
     </span>
   )
 }

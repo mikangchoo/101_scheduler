@@ -2,16 +2,18 @@
 export const CONSENT_YES_START = "11:00"
 
 /** Options when consent form is NOT received */
-export type NoConsentStart = "13:00" | "16:30" | "17:30"
+export type NoConsentStart = "13:00" | "13:30" | "16:30" | "17:30"
 
 export const NO_CONSENT_OPTIONS: { value: NoConsentStart; label: string }[] = [
   { value: "13:00", label: "1:00 P.M." },
+  { value: "13:30", label: "1:30 P.M." },
   { value: "16:30", label: "4:30 P.M." },
   { value: "17:30", label: "5:30 P.M." },
 ]
 
 /** 항암제 당기기 한도 (분) */
 export const CHEMO_PULL_MIN = 120
+
 /** Busulfan 포함 시 당기기 한도 (분) */
 export const BUSULFAN_PULL_MIN = 60
 
@@ -30,7 +32,7 @@ export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
   pullForward: {},
 }
 
-/** 첫 항암제 투약 시작 시간 — 동의서 "아니오"면 선택한 시간을 그대로 사용 */
+/** 첫 항암제 투약 시작 시간 */
 export function getChemoStartTime(settings: ScheduleSettings): string {
   if (settings.consentReceived === false) return settings.noConsentStart
   return CONSENT_YES_START
@@ -60,39 +62,61 @@ export function isShifted(settings: ScheduleSettings): boolean {
   return getChemoStartTime(settings) !== CONSENT_YES_START
 }
 
-/**
- * BID oral (Citopcin 500mg bid).
- * 기본 08:00 / 20:00
- * 13:00 시작 → 12:00 / 22:00
- * 16:30·17:30 시작 → 18:00 / 22:00
- */
+/** BID oral */
 export function getBidOralTimes(settings: ScheduleSettings): string[] {
   const start = getChemoStartTime(settings)
-  if (start === "13:00") return ["12:00", "22:00"]
-  if (start === "16:30" || start === "17:30") return ["18:00", "22:00"]
+
+  if (start === "13:00" || start === "13:30") {
+    return ["12:00", "22:00"]
+  }
+
+  if (start === "16:30" || start === "17:30") {
+    return ["18:00", "22:00"]
+  }
+
   return ["08:00", "20:00"]
 }
 
-/**
- * TID oral (Ursa 200mg tid).
- * 기본 08:00 / 12:00 / 18:00
- */
+/** TID oral */
 export function getTidOralTimes(settings: ScheduleSettings): string[] {
   const start = getChemoStartTime(settings)
-  if (start === "13:00") return ["12:00", "18:00", "22:00"]
-  if (start === "16:30" || start === "17:30") return ["18:00", "22:00"]
+
+  if (start === "13:00" || start === "13:30") {
+    return ["12:00", "18:00", "22:00"]
+  }
+
+  if (start === "16:30" || start === "17:30") {
+    return ["18:00", "22:00"]
+  }
+
   return ["08:00", "12:00", "18:00"]
 }
 
-/** 그 외 일반 PO (qd) 기본시간 → shift 시 재조정 */
-export function getQdOralTime(settings: ScheduleSettings, base = "08:00"): string {
+/** 그 외 일반 PO (qd) */
+export function getQdOralTime(
+  settings: ScheduleSettings,
+  base = "08:00",
+): string {
   const start = getChemoStartTime(settings)
-  if (start === "13:00" && toMinutes(base) < toMinutes("12:00")) return "12:00"
-  if ((start === "16:30" || start === "17:30") && toMinutes(base) < toMinutes("18:00")) return "18:00"
+
+  if (
+    (start === "13:00" || start === "13:30") &&
+    toMinutes(base) < toMinutes("12:00")
+  ) {
+    return "12:00"
+  }
+
+  if (
+    (start === "16:30" || start === "17:30") &&
+    toMinutes(base) < toMinutes("18:00")
+  ) {
+    return "18:00"
+  }
+
   return base
 }
 
-/** Mycamine 1일 1회: 16:00, 단 늦은 시작이면 20:00 */
+/** Mycamine 1일 1회 */
 export function getMycamineTime(settings: ScheduleSettings): string {
   const start = getChemoStartTime(settings)
   return start === "16:30" || start === "17:30" ? "20:00" : "16:00"
@@ -100,7 +124,14 @@ export function getMycamineTime(settings: ScheduleSettings): string {
 
 export function describeStart(settings: ScheduleSettings): string {
   const start = getChemoStartTime(settings)
-  if (settings.consentReceived === true) return `동의서 수령 · 첫 항암 ${start}`
-  if (settings.consentReceived === false) return `동의서 미수령 · 첫 항암 ${start}`
+
+  if (settings.consentReceived === true) {
+    return `동의서 수령 · 첫 항암 ${start}`
+  }
+
+  if (settings.consentReceived === false) {
+    return `동의서 미수령 · 첫 항암 ${start}`
+  }
+
   return `기본값 · 첫 항암 ${start}`
 }
