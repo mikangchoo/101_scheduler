@@ -36,7 +36,7 @@ export default function OrderPage() {
 
   useEffect(() => {
     if (!hydrated) return
-    if (!regimen) router.replace("/")
+    if (!regimen?.available) router.replace("/")
     else if (!isValidPatient(patient)) router.replace("/patient")
   }, [hydrated, regimen, patient, router])
 
@@ -49,13 +49,23 @@ export default function OrderPage() {
       calc: computeCalc(patient),
       doseOverrides,
       settings: scheduleSettings,
+      timeOverrides: times,
     })
-  }, [regimenId, patient, doseOverrides, day, days, scheduleSettings])
+  }, [regimenId, patient, doseOverrides, day, days, scheduleSettings, times])
 
   // 동의서 / 당기기 설정이 변하면 계산값을 다시 쓰도록 수동 편집분 초기화
   useEffect(() => {
     setTimes({})
-  }, [scheduleSettings.consentReceived, scheduleSettings.noConsentStart, scheduleSettings.pullForward])
+  }, [
+    scheduleSettings.consentReceived,
+    scheduleSettings.noConsentStart,
+    scheduleSettings.pullForward,
+    scheduleSettings.donorType,
+  ])
+
+  useEffect(() => {
+    setTimes({})
+  }, [regimenId])
 
   function timesFor(medId: string, fallback: string[]): string[] {
     return times[`${day}:${medId}`] ?? fallback
@@ -72,14 +82,21 @@ export default function OrderPage() {
     }))
   }
 
+  function dayLabel(value: number): string {
+    return regimenId === "fc" && value === 1 ? "D1" : formatDay(value)
+  }
+
   const prnTimes = useMemo(() => {
     if (!window_) return {}
-    return getPrnTimes(day, window_.meds, times, isAutoRegimen(regimenId))
+    const infusionTime = regimenId === "fc" ? null : isAutoRegimen(regimenId) ? "14:00" : "17:00"
+    return getPrnTimes(day, window_.meds, times, infusionTime, regimenId)
   }, [day, window_, times, regimenId])
 
-  if (!hydrated || !regimen || !isValidPatient(patient) || !window_) return null
+  const donorReady = regimenId !== "tbi-cy" || scheduleSettings.donorType != null
 
-  const firstDay = days[0] ?? day
+  if (!hydrated || !regimen?.available || !isValidPatient(patient) || !window_) return null
+
+  const firstDay = window_.firstChemoDay ?? day
   const isFirstDay = window_.isFirstDay
   const applied = effectiveSettings(scheduleSettings, day, firstDay)
   const pulled = (scheduleSettings.pullForward ?? {})[day] === true
@@ -96,13 +113,40 @@ export default function OrderPage() {
           </p>
         </div>
 
+        {regimenId === "tbi-cy" && (
+          <section className="mb-6 rounded-xl border border-border bg-card p-4">
+            <p className="text-sm font-medium text-foreground">공여자 유형을 선택하세요</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              혈연은 CsA + MTX, 비혈연은 Tacrolimus + MTX + ATG 오더만 표시됩니다. 선택 전에는 공여자별
+              면역억제 오더를 표시하지 않습니다.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <ChoiceButton
+                active={scheduleSettings.donorType === "related"}
+                onClick={() => setScheduleSettings((s) => ({ ...s, donorType: "related" }))}
+                label="혈연 공여자"
+              />
+              <ChoiceButton
+                active={scheduleSettings.donorType === "unrelated"}
+                onClick={() => setScheduleSettings((s) => ({ ...s, donorType: "unrelated" }))}
+                label="비혈연 공여자"
+              />
+            </div>
+            {scheduleSettings.donorType == null && (
+              <p className="mt-2 text-xs font-medium text-ocs-highlight">
+                공여자 유형을 선택해야 CsA 또는 Tacrolimus/ATG 실제 오더가 생성됩니다.
+              </p>
+            )}
+          </section>
+        )}
+
         {/* 첫 항암 투약일: 동의서 여부 / 이후: 항암제 당기기 */}
         <section className="mb-6 rounded-xl border border-border bg-card p-4">
           {isFirstDay ? (
             <>
               <p className="text-sm font-medium text-foreground">동의서가 있습니까?</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                첫 항암 투약일({formatDay(firstDay)})의 항암제 시작 시간을 결정합니다.
+                첫 항암 투약일({dayLabel(firstDay)})의 항암제 시작 시간을 결정합니다.
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <ChoiceButton
@@ -141,7 +185,7 @@ export default function OrderPage() {
               </div>
               <p className="mt-2 text-xs text-muted-foreground">{describeStart(scheduleSettings)}</p>
             </>
-          ) : (
+          ) : window_.hasChemo && window_.firstChemoDay != null && day > window_.firstChemoDay ? (
             <>
               <p className="text-sm font-medium text-foreground">항암제를 당길까요?</p>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -153,8 +197,16 @@ export default function OrderPage() {
                 <ChoiceButton active={!pulled} onClick={() => setPullForward(false)} label="아니오" />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                {formatDay(day)} · {describeStart(applied)}
+                {dayLabel(day)} · {describeStart(applied)}
                 {pulled ? ` · ${pullLimitMin}분 당김 적용` : ""}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-foreground">항암 시간 조정 없음</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {dayLabel(day)}은 실제 항암제 투약일이 아닙니다. TBI 같은 시술 시간은 해당 오더의 시간 선택에서
+                조정하고, 동의서와 항암제 당기기는 실제 항암 투약일에만 적용합니다.
               </p>
             </>
           )}
@@ -174,16 +226,16 @@ export default function OrderPage() {
                   : "bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground",
               )}
             >
-              {formatDay(d)}
+              {dayLabel(d)}
             </button>
           ))}
         </div>
 
         {/* OCS-style order window: 레지멘 전문 + 실제 오더 */}
         <div className="overflow-hidden rounded-xl border border-ocs-border shadow-lg">
-          <div className="grid grid-cols-[1fr_auto] bg-ocs-header px-3 py-2 text-[13px] font-semibold text-white">
-            <span>약품처방 — {formatDay(day)}</span>
-            <span className="text-right">수행시간</span>
+          <div className="grid grid-cols-1 gap-1 bg-ocs-header px-3 py-2 text-[13px] font-semibold text-white sm:grid-cols-[minmax(0,1fr)_auto]">
+            <span>약품처방 — {dayLabel(day)}</span>
+            <span className="sm:text-right">수행시간</span>
           </div>
 
           <div className="max-h-[62vh] overflow-y-auto bg-ocs-panel">
@@ -203,28 +255,26 @@ export default function OrderPage() {
           </div>
 
           {/* PRN order — 모든 일자 공통 */}
-          <div className="grid grid-cols-[1fr_auto] border-t border-ocs-border bg-ocs-header px-3 py-2 text-[13px] font-semibold text-white">
+          <div className="grid grid-cols-1 gap-1 border-t border-ocs-border bg-ocs-header px-3 py-2 text-[13px] font-semibold text-white sm:grid-cols-[minmax(0,1fr)_auto]">
             <span>PRN order</span>
-            <span className="text-right">수행시간</span>
+            <span className="sm:text-right">수행시간</span>
           </div>
           {PRN_ORDERS.map((o, i) => (
             <div
               key={o.id}
               className={cn(
-                "grid grid-cols-[1fr_auto] items-start gap-4 border-b border-ocs-border px-3 py-1.5",
+                "grid grid-cols-1 items-start gap-1 border-b border-ocs-border px-3 py-1.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4",
                 i % 2 === 1 ? "bg-ocs-row-alt" : "bg-ocs-row",
               )}
             >
               <div className="min-w-0">
-                <p className="flex items-center gap-1.5 text-[13px] font-semibold text-ocs-text">
+                <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold text-ocs-text">
                   <Badge kind={o.badge} />
-                  <span className="truncate">{o.name}</span>
+                  <span className="break-words">{o.name}</span>
                 </p>
-                <p className="truncate text-[11px] text-ocs-muted">{o.detail}</p>
+                <p className="break-words text-[11px] text-ocs-muted">{o.detail}</p>
               </div>
-              <span className="whitespace-nowrap font-mono text-[13px] text-ocs-muted">
-                {prnTimes[o.id]?.length ? prnTimes[o.id].map((t) => `${t}/`).join(" ") : "PRN/"}
-              </span>
+              <PrnTimes times={prnTimes[o.id]} />
             </div>
           ))}
         </div>
@@ -244,8 +294,17 @@ export default function OrderPage() {
             이전
           </button>
           <button
-            onClick={() => router.push("/done")}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            onClick={() => {
+              if (donorReady) router.push("/done")
+            }}
+            disabled={!donorReady}
+            title={donorReady ? "완료 단계로 이동" : "공여자 유형을 먼저 선택하세요"}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-semibold transition-colors",
+              donorReady
+                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                : "cursor-not-allowed bg-muted text-muted-foreground",
+            )}
           >
             다음
             <ArrowRight className="h-4 w-4" />
@@ -265,7 +324,7 @@ function RegimenTextRow({ line }: { line: RenderLine }) {
   const indent = line.indent ?? 0
 
   return (
-    <div className="flex items-start gap-3 px-3 py-[1px]">
+    <div className="flex flex-col items-start gap-0.5 px-3 py-[1px] sm:flex-row sm:gap-3">
       <p
         className={cn(
           "min-w-0 flex-1 italic leading-relaxed",
@@ -279,7 +338,7 @@ function RegimenTextRow({ line }: { line: RenderLine }) {
         {text}
       </p>
       {line.annotation && (
-        <span className="shrink-0 whitespace-nowrap font-mono text-[12px] italic text-ocs-muted">
+        <span className="whitespace-normal break-words font-mono text-[12px] italic text-ocs-muted sm:shrink-0 sm:text-right">
           {line.annotation}
         </span>
       )}
@@ -291,7 +350,8 @@ function getPrnTimes(
   day: number,
   meds: OrderMedWithMeta[],
   times: TimesState,
-  isAuto: boolean,
+  infusionTime: string | null,
+  regimenId: string | null,
 ): Record<string, string[]> {
   const nsTimes: string[] = []
   const d5wTimes: string[] = []
@@ -310,17 +370,48 @@ function getPrnTimes(
   }
 
   // 주입술 시간 = Allo 17:00 / Auto 14:00, D0 에만 NS 고정 스케줄
-  const infusion = isAuto ? "14:00" : "17:00"
-  const d0Ns = day === 0 ? [infusion, infusion] : []
+  const d0Ns = day === 0 && infusionTime ? [infusionTime, infusionTime] : []
+  const fcD1Ns = regimenId === "fc" && day === 1 ? ["00:00"] : []
+  const hasScheduledLasix10mg = meds.some(
+    (med) =>
+      med.id.startsWith("furosemide 10mg") &&
+      med.scheduleKind === "fixed" &&
+      med.defaultTimes.includes("06:00"),
+  )
 
   return {
-    ns100: d0Ns,
-    ns50: [...d0Ns, ...nsTimes],
+    ns100: [...d0Ns, ...fcD1Ns],
+    ns50: [...d0Ns, ...fcD1Ns, ...nsTimes],
     d5w50: [...d5wTimes],
     d5w20: Array.from({ length: d5wCount * 2 }, () => "00:00"),
-    lasix: [],
+    lasix: hasScheduledLasix10mg ? ["06:00(UO<1L)", "12:00", "18:00"] : [],
     "chlorph-prn": [],
   }
+}
+
+function PrnTimes({ times }: { times?: string[] }) {
+  if (!times?.length) {
+    return (
+      <span className="font-mono text-[13px] text-ocs-muted sm:text-right">PRN/</span>
+    )
+  }
+
+  return (
+    <span className="inline-flex flex-wrap justify-start gap-x-4 gap-y-1 whitespace-normal break-words font-mono text-[13px] sm:justify-end">
+      {times.map((value, index) => {
+        const match = value.match(/^([^()]+)(?:\((.*)\))?$/)
+        const time = match?.[1] ?? value
+        const annotation = match?.[2]
+
+        return (
+          <span className="inline-flex items-center" key={`${value}-${index}`}>
+            <span className="text-ocs-time">{time}/</span>
+            {annotation && <span className="text-ocs-highlight">({annotation})</span>}
+          </span>
+        )
+      })}
+    </span>
+  )
 }
 
 function ChoiceButton({

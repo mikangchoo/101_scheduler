@@ -19,10 +19,9 @@ export const REGIMEN_CATEGORIES: RegimenCategory[] = [
     label: "Auto",
     regimens: [
       { id: "hdmel", label: "HDMEL", available: true, hasBusulfan: false },
-      { id: "bueam", label: "BuEAM", available: false, hasBusulfan: true },
-      { id: "bucyeto", label: "BuCyEto", available: false, hasBusulfan: true },
+      { id: "bucyeto", label: "BuCyEto", available: true, hasBusulfan: true },
       { id: "thiobucy", label: "ThioBuCy", available: true, hasBusulfan: true },
-      { id: "bumel", label: "BuMel", available: false, hasBusulfan: true },
+      { id: "bumel", label: "BuMel", available: true, hasBusulfan: true },
     ],
   },
   {
@@ -31,13 +30,13 @@ export const REGIMEN_CATEGORIES: RegimenCategory[] = [
     regimens: [
       { id: "buflubatg", label: "BuFluATG", available: true, hasBusulfan: true },
       { id: "buflu-ptcy", label: "Buflu-PTCy", available: true, hasBusulfan: true },
-      { id: "tbi-cy", label: "TBI-Cy", available: false, hasBusulfan: false },
+      { id: "tbi-cy", label: "TBI-Cy", available: true, hasBusulfan: false },
     ],
   },
   {
     id: "cart",
     label: "Car-T",
-    regimens: [{ id: "fc", label: "FC", available: false, hasBusulfan: false }],
+    regimens: [{ id: "fc", label: "FC", available: true, hasBusulfan: false }],
   },
 ]
 
@@ -69,7 +68,7 @@ export function getRegimenCategoryId(id: string | null): string | null {
   return null
 }
 
-/** 자가조혈모세포이식(auto) 레지멘 여부 — HDMEL, BuEAM, BuCyEto, ThioBuCy, BuMel */
+/** 자가조혈모세포이식(auto) 레지멘 여부 — HDMEL, BuCyEto, ThioBuCy, BuMel */
 export function isAutoRegimen(id: string | null): boolean {
   return getRegimenCategoryId(id) === "auto"
 }
@@ -112,7 +111,9 @@ export interface OrderMed {
   doseText?: string
   /** 레지멘에서 계산된 용매 용량 (예: 300 mL) */
   solventDoseText?: string
-  /** 수행시간 첫 칸에 표기할 주입 속도 (예: 240cc/hr) */
+  /** true일 때만 계산된 용매량이므로 빨간색으로 표시 */
+  solventDoseCalculated?: boolean
+  /** 수행시간 첫 칸에 표기할 주입 속도 (예: 240ch) */
   rateNote?: string
   /** 마지막 투약 시간 뒤 (end) 표기 */
   endMark?: boolean

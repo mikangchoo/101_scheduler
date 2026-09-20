@@ -61,7 +61,7 @@ const RIGHT_CHECKBOX = ["H2 blocker or PPI"]
 /** 좌측 체크박스를 반드시 표시할 라인 */
 const FORCE_CHECKBOX = [
   "G-CSF 300ug/m²",
-  "(250cc/hr: from -6 hr to +12hr",
+  "(250ch: from -6 hr to +12hr",
   "1.5L/day D+5 – D+7",
   "Premed (-30 min): Chlorpheniramine",
   "Vit K 10mg iv weekly",
@@ -94,12 +94,14 @@ function hasDayCount(text: string): boolean {
 
 /** PRN / 주석 / 대안 줄 접두어 → 체크박스 대상 아님 */
 function isNonOrderLine(trimmed: string): boolean {
-  return /^(prn|\*|※|#|-|–|\(|or\b|OR\b)/i.test(trimmed)
+  return /^(?:\(?(?:prn)\)?(?:\s|$)|\*|※|#|-|–|\(|or\b|(?:또는|혹은)(?:\s|$)|고위험군(?:\s|\(|$))/i.test(
+    trimmed,
+  )
 }
 
-/** 줄 맨 앞이 or/OR 로 시작 → 대안 요법 시작 */
+/** 줄 맨 앞이 or/OR/또는/혹은으로 시작 → 대안 요법 시작 */
 function isAlternativeLine(trimmed: string): boolean {
-  return /^or\b/i.test(trimmed)
+  return /^(?:or\b|(?:또는|혹은)(?:\s|$))/i.test(trimmed)
 }
 
 /**
@@ -160,7 +162,7 @@ function antiemeticIndexes(lines: RenderLine[]): {
  */
 function ensureAutoIvigLine(lines: RenderLine[], regimenId: string | null): RenderLine[] {
   if (!isAutoRegimen(regimenId)) return lines
-  if (lines.some((l) => textOf(l).includes(AUTO_IVIG_LINE))) return lines
+  if (lines.some((l) => /IVIg/i.test(textOf(l)))) return lines
 
   const anchor = lines.findIndex((l) => /CMV prophylaxis/i.test(textOf(l)))
   if (anchor < 0) return lines
@@ -207,7 +209,9 @@ export function adjustRegimenLines(rawLines: RenderLine[], opts: AdjustOptions):
 
     /* 2-1. Antiemetics 블록: day count 있는 처방 줄 & or 이전만 체크박스 */
     if (antiemetics.has(i)) {
-      if (antiemeticCheckbox.has(i)) {
+      if (raw.checkbox === false) {
+        line.checkbox = false
+      } else if (antiemeticCheckbox.has(i)) {
         line.checkbox = true
         line.id = line.id ?? `antiemetic-cb-${i}`
       } else {
@@ -246,7 +250,7 @@ export function adjustRegimenLines(rawLines: RenderLine[], opts: AdjustOptions):
     }
 
     /* 7. G-CSF: 계산값 삭제 + 시작일 빨간 글씨 */
-    if (/G-CSF/.test(text) && !text.includes("600ug")) {
+    if (/G-CSF/.test(text) && !/G-CSF\s*600\s*ug/i.test(text)) {
       line.annotation = undefined
       line = appendRed(line, `  ${gcsfStart}`)
     }
@@ -259,9 +263,9 @@ export function adjustRegimenLines(rawLines: RenderLine[], opts: AdjustOptions):
       )
     }
 
-    /* 8-2. 1.5L/day D+5 – D+7 → cc/hr 우측 정렬 */
+    /* 8-2. 1.5L/day D+5 – D+7 → ch 우측 정렬 */
     if (text.includes("1.5L/day D+5 – D+7")) {
-      line.annotation = `${n(1500 / 24, 1)} cc/hr`
+      line.annotation = `${n(1500 / 24, 1)} ch`
     }
 
     /* 8-3. ATG 1.5 / 2.5 mg/kg/day 계산값 */

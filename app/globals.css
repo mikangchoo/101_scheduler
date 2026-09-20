@@ -15,7 +15,7 @@
   --color-ocs-border: #2a3d57;
   --color-ocs-text: #e6edf6;
   --color-ocs-muted: #93a6bf;
-  --color-ocs-time: #d7e3f2;
+  --color-ocs-time: #ffffff;
   --color-ocs-highlight: #4a90d9;
   --color-ocs-header: #2f6db5;
 
@@ -213,6 +213,7 @@
     box-shadow: none !important;
     border: none !important;
     border-radius: 0 !important;
+    overflow: visible !important;
     margin: 0 !important;
     max-width: 100% !important;
     background: #ffffff !important;

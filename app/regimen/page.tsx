@@ -32,7 +32,7 @@ export default function RegimenConfirmPage() {
 
   useEffect(() => {
     if (!hydrated) return
-    if (!regimen) router.replace("/")
+    if (!regimen?.available) router.replace("/")
     else if (!isValidPatient(patient)) router.replace("/patient")
   }, [hydrated, regimen, patient, router])
 
@@ -45,7 +45,7 @@ export default function RegimenConfirmPage() {
     })
   }, [patient, regimenId, doseOverrides])
 
-  if (!hydrated || !regimen || !isValidPatient(patient)) return null
+  if (!hydrated || !regimen?.available || !isValidPatient(patient)) return null
 
   const title = lines.find((l) => l.kind === "title")?.text ?? regimen.label
 
@@ -80,7 +80,7 @@ export default function RegimenConfirmPage() {
             <h1 className="text-center text-lg font-bold text-ocs-header">{title}</h1>
             {/* 제목과 환자정보 사이: 한 줄 */}
             <div className="h-[1em]" aria-hidden="true" />
-            <PatientHeaderLines patient={patient} showAbw={regimenId !== "hdmel"} />
+            <PatientHeaderLines patient={patient} showAbw={regimen.hasBusulfan} />
             {/* 환자정보와 본문 사이: 두 줄 */}
             <div className="h-[2em]" aria-hidden="true" />
           </div>
@@ -194,7 +194,7 @@ function RegimenLineRow({
       {/* 본문: 체크박스와 항상 같은 줄에서 시작 */}
       <p
         className={cn(
-          "flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
+          "not-italic flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 leading-relaxed text-ocs-text",
           indentClass,
           kind === "title" && "mb-1 text-base font-bold text-ocs-header",
           kind === "section" && "mt-1 text-sm text-ocs-highlight",
@@ -214,7 +214,7 @@ function RegimenLineRow({
       </p>
 
       {annotation && (
-        <span className="shrink-0 whitespace-nowrap font-mono text-sm font-semibold text-red-500">
+        <span className="max-w-[40%] shrink break-words whitespace-normal text-right font-mono text-sm font-semibold leading-snug text-red-500 sm:max-w-none sm:shrink-0 sm:whitespace-nowrap print:max-w-none print:shrink-0 print:whitespace-nowrap">
           {annotation}
         </span>
       )}

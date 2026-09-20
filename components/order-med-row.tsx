@@ -18,7 +18,13 @@ interface Props {
  * 용매가 있는 오더는 묶음(bundle)으로 표시하고 수행시간은 윗줄만 표기한다.
  */
 export function OrderMedRow({ med, times, onChange, alt }: Props) {
-  const bundled = Boolean(med.solvent)
+  const bundled = Boolean(med.solvent || med.bundleItems?.length)
+  const showHoldFirstDose =
+    med.holdFirstDose === true ||
+    (!med.noHoldFirstDose &&
+      (times[0] === "18:00" ||
+        (times[0] === "20:00" &&
+          (med.id.startsWith("citopcin") || med.id.startsWith("acyclovir")))))
 
   return (
     <div
@@ -33,28 +39,29 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
 
         <div
           className={cn(
-            "grid grid-cols-[1fr_auto] items-start gap-4 px-3 py-1.5",
+            "grid grid-cols-1 items-start gap-1 px-3 py-1.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4",
             bundled && "pl-6",
           )}
         >
           <div className="min-w-0">
-            <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
-              {med.lastOralDose && <HoldIcon />}
+            <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
+              {(med.lastOralDose || med.holdMainOrder) && <HoldIcon />}
+              {med.tit && <Badge kind="TIT" />}
               {med.sup && <Badge kind="SUP" />}
-              <span className="truncate">{med.name}</span>
+              <span className="break-words">{med.name}</span>
               {med.doseText && (
                 <span className="whitespace-nowrap text-red-500 print:text-red-600">
                   {med.doseText}
                 </span>
               )}
             </p>
-            <p className="truncate text-[11px] not-italic text-ocs-muted">{med.detail}</p>
+            <p className="break-words text-[11px] not-italic text-ocs-muted">{med.detail}</p>
             {med.note && (
-              <p className="mt-0.5 text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>
+              <p className="mt-0.5 break-words text-[11px] not-italic text-ocs-highlight/80">{med.note}</p>
             )}
           </div>
 
-          <div className="shrink-0 text-right">
+          <div className="min-w-0 text-left sm:shrink-0 sm:text-right">
             {med.scheduleKind === "thiotepa" ? (
               <SelectTime med={med} times={times} onChange={onChange} />
             ) : med.scheduleKind === "citopcin" ? (
@@ -77,9 +84,10 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
               <FixedTime
                 times={times}
                 suffix={med.suffix}
+                suffixEachTime={med.suffixEachTime}
+                firstTimeNote={med.firstTimeNote}
                 timeNote={med.timeNote}
                 solo={med.solo}
-                highlight={med.scheduleKind === "chemo"}
                 rateNote={med.rateNote}
                 endMark={med.endMark}
               />
@@ -89,11 +97,18 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
 
         {/* 용매 줄 — 수행시간 없음 */}
         {med.solvent && (
-          <div className="grid grid-cols-[1fr_auto] items-start gap-4 px-3 pb-1.5 pl-6">
-            <p className="truncate text-[13px] not-italic text-ocs-text">
+          <div className="grid grid-cols-1 items-start gap-1 px-3 pb-1.5 pl-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+            <p className="break-words text-[13px] not-italic text-ocs-text">
               {med.solvent}
               {med.solventDoseText && (
-                <span className="ml-1 whitespace-nowrap text-red-500 print:text-red-600">
+                <span
+                  className={cn(
+                    "ml-1 whitespace-nowrap",
+                    med.solventDoseCalculated
+                      ? "text-red-500 print:text-red-600"
+                      : "text-ocs-text",
+                  )}
+                >
                   {med.solventDoseText}
                 </span>
               )}
@@ -101,20 +116,53 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
             <span aria-hidden="true" />
           </div>
         )}
+
+        {med.bundleItems?.map((item) => (
+          <div
+            key={`${med.id}-${item.name}`}
+            className="grid grid-cols-1 items-start gap-1 px-3 pb-1.5 pl-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4"
+          >
+            <div className="min-w-0">
+              <p className="break-words text-[13px] font-semibold not-italic text-ocs-text">{item.name}</p>
+              {item.detail && (
+                <p className="break-words text-[11px] not-italic text-ocs-muted">{item.detail}</p>
+              )}
+            </div>
+            <span aria-hidden="true" />
+          </div>
+        ))}
       </div>
 
       {/* 첫 투약 — +1 오더 (스케줄링 없음, 묶음 밖) */}
       {med.firstDose && (
-        <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-ocs-border/60 px-3 py-1.5">
-          <p className="flex items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
-            <PlusOneIcon />
-            <span className="truncate">{med.name}</span>
-            {med.doseText && (
-              <span className="whitespace-nowrap text-red-500 print:text-red-600">
-                {med.doseText}
-              </span>
+        <div className="grid grid-cols-1 items-start gap-1 border-t border-ocs-border/60 px-3 py-1.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+          <div className="min-w-0">
+            <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
+              <PlusOneIcon />
+              {showHoldFirstDose && <HoldIcon />}
+              <span className="break-words">{med.name}</span>
+              {med.doseText && (
+                <span className="whitespace-nowrap text-red-500 print:text-red-600">
+                  {med.doseText}
+                </span>
+              )}
+            </p>
+            {med.repeatDetailOnFirstDose && med.detail && (
+              <p className="break-words text-[11px] not-italic text-ocs-muted">{med.detail}</p>
             )}
-          </p>
+            {med.bundleItems?.map((item) => (
+              <div className="mt-1 min-w-0" key={`${med.id}-first-${item.name}`}>
+                <p className="flex flex-wrap items-center gap-1.5 break-words text-[13px] font-semibold not-italic text-ocs-text">
+                  <PlusOneIcon />
+                  {showHoldFirstDose && <HoldIcon />}
+                  <span>{item.name}</span>
+                </p>
+                {item.detail && (
+                  <p className="break-words text-[11px] not-italic text-ocs-muted">{item.detail}</p>
+                )}
+              </div>
+            ))}
+          </div>
           <span aria-hidden="true" />
         </div>
       )}
@@ -160,7 +208,7 @@ export function Badge({ kind }: { kind: "SUP" | "PRN" | "TIT" }) {
     <span
       className={cn(
         "not-italic rounded-sm px-1 py-[1px] text-[10px] font-bold leading-none text-white",
-        kind === "SUP" && "bg-emerald-600",
+        kind === "SUP" && "bg-[#27788f]",
         kind === "PRN" && "bg-sky-700",
         kind === "TIT" && "bg-amber-600",
       )}
@@ -173,35 +221,50 @@ export function Badge({ kind }: { kind: "SUP" | "PRN" | "TIT" }) {
 function FixedTime({
   times,
   suffix,
+  suffixEachTime,
+  firstTimeNote,
   timeNote,
   solo,
-  highlight,
   rateNote,
   endMark,
 }: {
   times: string[]
   suffix?: string
+  suffixEachTime?: boolean
+  firstTimeNote?: string
   timeNote?: string
   solo?: boolean
-  highlight?: boolean
   rateNote?: string
   endMark?: boolean
 }) {
+  const lastIndex = times.length - 1
+
   return (
-    <span className="whitespace-nowrap font-mono text-[13px] not-italic">
-      <span className={highlight ? "text-ocs-highlight" : "text-ocs-time"}>
+    <span className="inline-flex max-w-full flex-wrap items-center whitespace-normal break-words font-mono text-[13px] not-italic">
+      <span className="inline-flex flex-wrap gap-x-4 gap-y-1">
         {times.map((t, i) => (
-          <span key={`${t}-${i}`}>
-            {t}
-            {i === 0 && rateNote && <span className="text-white">({rateNote})</span>}
-            {"/ "}
+          <span className="inline-flex items-center" key={`${t}-${i}`}>
+            <span className="text-ocs-time">{t}/</span>
+            {suffixEachTime && suffix && (
+              <span className="text-ocs-highlight">({suffix})</span>
+            )}
+            {i === 0 && firstTimeNote && (
+              <span className="text-ocs-highlight">({firstTimeNote})</span>
+            )}
+            {i === 0 && rateNote && (
+              <span className="text-ocs-highlight">({rateNote})</span>
+            )}
+            {i === lastIndex && solo && <span className="text-ocs-highlight">(단독)</span>}
+            {i === lastIndex && suffix && !suffixEachTime && (
+              <span className="text-ocs-highlight">({suffix})</span>
+            )}
+            {i === lastIndex && timeNote && (
+              <span className="text-ocs-highlight">({timeNote})</span>
+            )}
+            {i === lastIndex && endMark && <span className="text-ocs-highlight">(end)</span>}
           </span>
         ))}
-        {endMark && <span className="ml-1 text-ocs-text">(end)</span>}
       </span>
-      {solo && <span className="ml-1 text-ocs-muted">(단독)</span>}
-      {suffix && <span className="ml-1 text-ocs-highlight">({suffix})</span>}
-      {timeNote && <span className="ml-1 text-ocs-highlight/80">({timeNote})</span>}
     </span>
   )
 }
@@ -217,7 +280,7 @@ function SelectTime({
 }) {
   const current = times[0] ?? med.defaultTimes[0]
   return (
-    <div className="flex items-center justify-end gap-1.5 not-italic">
+    <div className="flex max-w-full flex-wrap items-center justify-start not-italic sm:justify-end">
       <div className="relative">
         <select
           value={current}
@@ -233,13 +296,14 @@ function SelectTime({
         </select>
         <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ocs-muted" />
       </div>
+      <span className="font-mono text-[13px] text-ocs-time">/</span>
       {med.suffix && (
-        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight">
-          ({med.suffix})/
+        <span className="whitespace-normal font-mono text-[13px] text-ocs-highlight">
+          ({med.suffix})
         </span>
       )}
       {med.timeNote && (
-        <span className="whitespace-nowrap font-mono text-[13px] text-ocs-highlight/80">
+        <span className="whitespace-normal font-mono text-[13px] text-ocs-highlight">
           ({med.timeNote})
         </span>
       )}
@@ -260,7 +324,7 @@ function EditableTime({
   return (
     <div
       ref={ref}
-      className="relative flex items-center justify-end gap-1 font-mono text-[13px] not-italic text-ocs-time"
+      className="relative flex max-w-full flex-wrap items-center justify-start gap-1 font-mono text-[13px] not-italic text-ocs-time sm:justify-end"
     >
       {times.map((t, i) =>
         i === 0 ? (

@@ -24,11 +24,15 @@ const STORAGE_KEY = "regimen-flow-v2"
 
 const FlowContext = createContext<FlowContextValue | null>(null)
 
+function freshScheduleSettings(): ScheduleSettings {
+  return { ...DEFAULT_SCHEDULE_SETTINGS, pullForward: {} }
+}
+
 const EMPTY: FlowState = {
   regimenId: null,
   patient: null,
   doseOverrides: {},
-  scheduleSettings: DEFAULT_SCHEDULE_SETTINGS,
+  scheduleSettings: freshScheduleSettings(),
 }
 
 function loadInitial(): FlowState {
@@ -40,7 +44,11 @@ function loadInitial(): FlowState {
       return {
         ...EMPTY,
         ...parsed,
-        scheduleSettings: { ...DEFAULT_SCHEDULE_SETTINGS, ...parsed.scheduleSettings },
+        scheduleSettings: {
+          ...freshScheduleSettings(),
+          ...parsed.scheduleSettings,
+          pullForward: { ...(parsed.scheduleSettings?.pullForward ?? {}) },
+        },
       }
     }
   } catch {
@@ -70,7 +78,17 @@ export function FlowProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<FlowContextValue>(
     () => ({
       ...state,
-      setRegimenId: (id) => setState((s) => ({ ...s, regimenId: id, doseOverrides: {} })),
+      setRegimenId: (id) =>
+        setState((s) =>
+          s.regimenId === id
+            ? s
+            : {
+                ...s,
+                regimenId: id,
+                doseOverrides: {},
+                scheduleSettings: freshScheduleSettings(),
+              },
+        ),
       setPatient: (p) => setState((s) => ({ ...s, patient: p })),
       setDoseOverrides: (o) =>
         setState((s) => ({
@@ -83,7 +101,7 @@ export function FlowProvider({ children }: { children: React.ReactNode }) {
           scheduleSettings:
             typeof settings === "function" ? settings(s.scheduleSettings) : settings,
         })),
-      reset: () => setState(EMPTY),
+      reset: () => setState({ ...EMPTY, doseOverrides: {}, scheduleSettings: freshScheduleSettings() }),
     }),
     [state],
   )

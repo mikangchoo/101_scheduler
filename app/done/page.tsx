@@ -1,18 +1,40 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { CheckCircle2, RotateCcw } from "lucide-react"
 import { StepHeader } from "@/components/step-header"
 import { useFlow } from "@/contexts/flow-context"
+import { isValidPatient } from "@/lib/calc"
+import { findRegimen } from "@/lib/regimens"
 
 export default function DonePage() {
   const router = useRouter()
-  const { reset } = useFlow()
+  const { regimenId, patient, scheduleSettings, reset } = useFlow()
+  const regimen = findRegimen(regimenId)
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => setHydrated(true), [])
+
+  useEffect(() => {
+    if (!hydrated) return
+    if (!regimen?.available) router.replace("/")
+    else if (!isValidPatient(patient)) router.replace("/patient")
+    else if (regimenId === "tbi-cy" && scheduleSettings.donorType == null) router.replace("/order")
+  }, [hydrated, regimen, patient, regimenId, scheduleSettings.donorType, router])
+
+  const ready =
+    hydrated &&
+    regimen?.available === true &&
+    isValidPatient(patient) &&
+    (regimenId !== "tbi-cy" || scheduleSettings.donorType != null)
 
   function startOver() {
     reset()
     router.push("/")
   }
+
+  if (!ready) return null
 
   return (
     <main className="min-h-dvh bg-background">

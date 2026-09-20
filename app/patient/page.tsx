@@ -22,7 +22,7 @@ export default function PatientPage() {
 
   // Guard: no regimen selected → back to step 1
   useEffect(() => {
-    if (hydrated && !regimen) router.replace("/")
+    if (hydrated && !regimen?.available) router.replace("/")
   }, [hydrated, regimen, router])
 
   // Prefill from stored flow state
@@ -140,8 +140,8 @@ export default function PatientPage() {
               )}
             </dl>
             <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-              BSA = √[(키 × 몸무게) / 3600]. IBW는 성별·키 기준식으로 계산되며, ABW25 = IBW + 0.25 × (실제체중 − IBW)
-              입니다.
+              BSA = √[(키 × 몸무게) / 3600]. IBW는 성별·키 기준식으로 계산됩니다.
+              {regimen?.hasBusulfan && " ABW25 = IBW + 0.25 × (실제체중 − IBW)입니다."}
             </p>
           </section>
         </div>
