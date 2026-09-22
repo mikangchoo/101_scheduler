@@ -49,13 +49,16 @@ export default function DonePage() {
         </p>
         <div
           role="note"
-          className="mt-6 w-full rounded-xl border border-border bg-muted/40 px-5 py-4 text-left text-sm leading-relaxed text-muted-foreground"
+          className="mt-6 w-full rounded-xl border border-border bg-muted/40 px-5 py-4 text-center text-sm leading-relaxed text-muted-foreground"
         >
           <p>
-            본 애플리케이션은 표준화된 레지멘을 이용하여  스케줄링 가이드라인을 제시하는 목적으로 만들어졌습니다.
+            본 애플리케이션은 표준화된 레지멘을 기반으로 오더 스케줄링을 지원하는 참고용 도구이며, 의료진의 임상적 판단이나 원본 프로토콜 확인을 대체하지 않습니다.
           </p>
-          <p className="mt-2 font-medium text-foreground">
-            실제 환자에게 적용 시에는 레지멘의 세부 내용(투약일과 용량 등)을 반드시 재확인하시기 바랍니다.
+          <p className="mt-3 font-bold text-primary">
+            실제 환자에게 적용하기 전 반드시 레지멘 원문을 기반으로 투약일, 용량, 투여경로 및 수행시간을 재확인하시기 바랍니다.
+          </p>
+          <p className="mt-3">
+            시스템 관련 문의, 오류 신고 및 개선 제안은 추미강에게 문의해 주세요.
           </p>
         </div>
         <button
