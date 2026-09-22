@@ -77,10 +77,12 @@ export const DEFAULT_DOSES: Record<string, Partial<Record<DoseKey, number>>> = {
   buflubatg: {
     busulfan_mg_kg: 3.2,
     fludarabine_mg_m2: 40,
-    // 1.5 for matched related; 2.5 for unrelated/mismatched (default unrelated)
+    // Donor selection overrides this to related 1.5 or unrelated 2.5.
     atg_mg_kg: 2.5,
     mpred_mg_kg: 1,
     mtx_mg_m2: 15,
+    csa_mg_kg: 3,
+    tacrolimus_mg_kg_day: 0.04,
   },
   "buflu-ptcy": {
     busulfan_mg_kg: 3.2,
@@ -89,6 +91,8 @@ export const DEFAULT_DOSES: Record<string, Partial<Record<DoseKey, number>>> = {
     conditioning_cyclo_mg_kg: 14.5,
     ptcy_mg_kg: 50,
     mmf_mg_kg: 15,
+    csa_mg_kg: 3,
+    tacrolimus_mg_kg_day: 0.04,
   },
 }
 

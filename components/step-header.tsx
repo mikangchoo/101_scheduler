@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { useFlow } from "@/contexts/flow-context"
 import { isValidPatient } from "@/lib/calc"
-import { findRegimen, getSelectedRegimenLabel } from "@/lib/regimens"
+import { findRegimen, getSelectedRegimenLabel, isAlloRegimen } from "@/lib/regimens"
 
 interface StepDef {
   label: string
@@ -27,7 +27,7 @@ export function StepHeader({ current }: { current: number }) {
   const hasRegimen = findRegimen(regimenId)?.available === true
   const regimenLabel = getSelectedRegimenLabel(regimenId)
   const hasPatient = isValidPatient(patient)
-  const hasRequiredOrderChoices = regimenId !== "tbi-cy" || scheduleSettings.donorType != null
+  const hasRequiredOrderChoices = !isAlloRegimen(regimenId) || scheduleSettings.donorType != null
 
   /** 앞 단계는 항상 이동 가능, 뒷 단계는 필요한 데이터가 있어야 이동 가능 */
   function canGo(step: number): boolean {

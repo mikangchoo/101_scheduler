@@ -11,7 +11,7 @@
   /* OCS order-window palette (used by components/order-med-row.tsx) */
   --color-ocs-panel: #14233a;
   --color-ocs-row: #0f1e33;
-  --color-ocs-row-alt: #14273f;
+  --color-ocs-row-alt: #0f1e33;
   --color-ocs-border: #2a3d57;
   --color-ocs-text: #e6edf6;
   --color-ocs-muted: #93a6bf;

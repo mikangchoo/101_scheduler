@@ -23,7 +23,7 @@ function formatPatientNumber(value: number): string {
 
 export default function RegimenConfirmPage() {
   const router = useRouter()
-  const { regimenId, patient, doseOverrides, setDoseOverrides } = useFlow()
+  const { regimenId, patient, doseOverrides, scheduleSettings, setDoseOverrides } = useFlow()
   const regimen = findRegimen(regimenId)
   const [hydrated, setHydrated] = useState(false)
   const [checked, setChecked] = useState<Record<string, boolean>>({})
@@ -39,11 +39,14 @@ export default function RegimenConfirmPage() {
   const lines = useMemo<AdjustedLine[]>(() => {
     if (!isValidPatient(patient) || !regimenId) return []
     const calc = computeCalc(patient)
-    return adjustRegimenLines(buildRegimenLines(regimenId, calc, doseOverrides), {
-      regimenId,
-      calc,
-    })
-  }, [patient, regimenId, doseOverrides])
+    return adjustRegimenLines(
+      buildRegimenLines(regimenId, calc, doseOverrides, scheduleSettings.donorType),
+      {
+        regimenId,
+        calc,
+      },
+    )
+  }, [patient, regimenId, doseOverrides, scheduleSettings.donorType])
 
   if (!hydrated || !regimen?.available || !isValidPatient(patient)) return null
 

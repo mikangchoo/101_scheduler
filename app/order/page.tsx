@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowRight, ChevronDown } from "lucide-react"
 import { StepHeader } from "@/components/step-header"
 import { Badge, OrderMedRow } from "@/components/order-med-row"
 import { useFlow } from "@/contexts/flow-context"
-import { findRegimen, isAutoRegimen } from "@/lib/regimens"
+import { findRegimen, isAlloRegimen, isAutoRegimen } from "@/lib/regimens"
 import { computeCalc, isValidPatient } from "@/lib/calc"
 import { formatDay, getOrderDaysForRegimen, getPullLimitMin } from "@/lib/order-schedule"
 import type { OrderMedWithMeta } from "@/lib/order-schedule"
@@ -92,7 +92,18 @@ export default function OrderPage() {
     return getPrnTimes(day, window_.meds, times, infusionTime, regimenId)
   }, [day, window_, times, regimenId])
 
-  const donorReady = regimenId !== "tbi-cy" || scheduleSettings.donorType != null
+  const donorRequired = isAlloRegimen(regimenId)
+  const donorReady = !donorRequired || scheduleSettings.donorType != null
+  const donorDescription =
+    regimenId === "buflubatg"
+      ? "혈연은 ATG 1.5mg/kg/day + CsA + MTX, 비혈연은 ATG 2.5mg/kg/day + Tacrolimus + MTX 오더로 연결됩니다."
+      : regimenId === "buflu-ptcy"
+        ? "혈연은 CsA + MMF, 비혈연은 Tacrolimus + MMF 오더로 연결됩니다."
+        : "혈연은 CsA + MTX, 비혈연은 Tacrolimus + MTX + ATG 오더로 연결됩니다."
+  const donorWarning =
+    regimenId === "buflubatg"
+      ? "공여자 유형을 선택해야 ATG 용량과 CsA/Tacrolimus 실제 오더가 확정됩니다."
+      : "공여자 유형을 선택해야 CsA 또는 Tacrolimus 실제 오더가 생성됩니다."
 
   if (!hydrated || !regimen?.available || !isValidPatient(patient) || !window_) return null
 
@@ -113,13 +124,10 @@ export default function OrderPage() {
           </p>
         </div>
 
-        {regimenId === "tbi-cy" && (
+        {donorRequired && (
           <section className="mb-6 rounded-xl border border-border bg-card p-4">
             <p className="text-sm font-medium text-foreground">공여자 유형을 선택하세요</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              혈연은 CsA + MTX, 비혈연은 Tacrolimus + MTX + ATG 오더만 표시됩니다. 선택 전에는 공여자별
-              면역억제 오더를 표시하지 않습니다.
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{donorDescription}</p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <ChoiceButton
                 active={scheduleSettings.donorType === "related"}
@@ -133,9 +141,7 @@ export default function OrderPage() {
               />
             </div>
             {scheduleSettings.donorType == null && (
-              <p className="mt-2 text-xs font-medium text-ocs-highlight">
-                공여자 유형을 선택해야 CsA 또는 Tacrolimus/ATG 실제 오더가 생성됩니다.
-              </p>
+              <p className="mt-2 text-xs font-medium text-ocs-highlight">{donorWarning}</p>
             )}
           </section>
         )}
@@ -337,11 +343,13 @@ function RegimenTextRow({ line }: { line: RenderLine }) {
       >
         {text}
       </p>
-      {line.annotation && (
+      {line.orderTimes?.length ? (
+        <PrnTimes times={line.orderTimes} />
+      ) : line.annotation ? (
         <span className="whitespace-normal break-words font-mono text-[12px] italic text-ocs-muted sm:shrink-0 sm:text-right">
           {line.annotation}
         </span>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -372,6 +380,9 @@ function getPrnTimes(
   // 주입술 시간 = Allo 17:00 / Auto 14:00, D0 에만 NS 고정 스케줄
   const d0Ns = day === 0 && infusionTime ? [infusionTime, infusionTime] : []
   const fcD1Ns = regimenId === "fc" && day === 1 ? ["00:00"] : []
+  const tbiPremedNs = meds.some((med) => med.id === "tbi-metoclopramide")
+    ? ["00:00"]
+    : []
   const hasScheduledLasix10mg = meds.some(
     (med) =>
       med.id.startsWith("furosemide 10mg") &&
@@ -381,7 +392,7 @@ function getPrnTimes(
 
   return {
     ns100: [...d0Ns, ...fcD1Ns],
-    ns50: [...d0Ns, ...fcD1Ns, ...nsTimes],
+    ns50: [...d0Ns, ...fcD1Ns, ...tbiPremedNs, ...nsTimes],
     d5w50: [...d5wTimes],
     d5w20: Array.from({ length: d5wCount * 2 }, () => "00:00"),
     lasix: hasScheduledLasix10mg ? ["06:00(UO<1L)", "12:00", "18:00"] : [],
@@ -405,8 +416,9 @@ function PrnTimes({ times }: { times?: string[] }) {
 
         return (
           <span className="inline-flex items-center" key={`${value}-${index}`}>
-            <span className="text-ocs-time">{time}/</span>
+            <span className="text-ocs-time">{time}</span>
             {annotation && <span className="text-ocs-highlight">({annotation})</span>}
+            <span className="text-ocs-time">/</span>
           </span>
         )
       })}

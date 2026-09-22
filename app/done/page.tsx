@@ -6,7 +6,7 @@ import { CheckCircle2, RotateCcw } from "lucide-react"
 import { StepHeader } from "@/components/step-header"
 import { useFlow } from "@/contexts/flow-context"
 import { isValidPatient } from "@/lib/calc"
-import { findRegimen } from "@/lib/regimens"
+import { findRegimen, isAlloRegimen } from "@/lib/regimens"
 
 export default function DonePage() {
   const router = useRouter()
@@ -20,14 +20,14 @@ export default function DonePage() {
     if (!hydrated) return
     if (!regimen?.available) router.replace("/")
     else if (!isValidPatient(patient)) router.replace("/patient")
-    else if (regimenId === "tbi-cy" && scheduleSettings.donorType == null) router.replace("/order")
+    else if (isAlloRegimen(regimenId) && scheduleSettings.donorType == null) router.replace("/order")
   }, [hydrated, regimen, patient, regimenId, scheduleSettings.donorType, router])
 
   const ready =
     hydrated &&
     regimen?.available === true &&
     isValidPatient(patient) &&
-    (regimenId !== "tbi-cy" || scheduleSettings.donorType != null)
+    (!isAlloRegimen(regimenId) || scheduleSettings.donorType != null)
 
   function startOver() {
     reset()

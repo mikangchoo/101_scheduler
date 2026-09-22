@@ -4,7 +4,7 @@ export const CONSENT_YES_START = "11:00"
 /** Options when consent form is NOT received */
 export type NoConsentStart = "13:00" | "13:30" | "16:30" | "17:30"
 
-/** TBI-Cy GVHD prophylaxis branch. Null means not selected yet. */
+/** Allo GVHD prophylaxis branch. Null means not selected yet. */
 export type DonorType = "related" | "unrelated" | null
 
 export const NO_CONSENT_OPTIONS: { value: NoConsentStart; label: string }[] = [
@@ -27,7 +27,7 @@ export interface ScheduleSettings {
   noConsentStart: NoConsentStart
   /** 첫 항암 투약일 이후 일자별 "항암제 당기기" 여부 */
   pullForward: Record<number, boolean>
-  /** TBI-Cy: related=CsA+MTX, unrelated=Tacrolimus+MTX+ATG */
+  /** Allo donor branch used to choose ATG dose and CsA/Tacrolimus orders. */
   donorType: DonorType
 }
 

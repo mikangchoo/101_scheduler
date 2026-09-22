@@ -100,10 +100,16 @@ interface MedDef {
   splitInfusion?: { count: number; intervalMin: number }
   /** 수행시간 옆 부가 표기 (얼음/EKG, 이식<>24hr 등) */
   timeNote?: string
+  /** 첫 수행시간 바로 뒤에만 표시할 부가 표기 */
+  firstTimeNote?: string
   /** SUP(수액/보조) 뱃지 */
   sup?: boolean
   /** TIT 뱃지 */
   tit?: boolean
+  /** 향정신성의약품 뱃지 */
+  controlled?: boolean
+  /** PRN 뱃지 */
+  prnBadge?: boolean
   /** 안내문 */
   note?: string
   /** 경구약 — 첫 투약 +1 / 마지막 투약 조제유보 아이콘 대상 */
@@ -112,6 +118,8 @@ interface MedDef {
   firstDoseExtra?: boolean
   /** +1 행에도 본 오더의 작은 용법·용량 줄을 반복 표시 */
   repeatDetailOnFirstDose?: boolean
+  /** +1 행에만 사용할 별도 용법·용량 */
+  firstDoseDetail?: string
   /** 컨디셔닝 이후로도 지속 투약 (마지막 투약 아이콘 생성 X) */
   continuous?: boolean
   /** +1 오더 및 마지막 투약 조제유보 생성 제외 */
@@ -128,7 +136,7 @@ interface MedDef {
   noHoldFirstDose?: boolean
   /** 투약 일자 */
   days: number[]
-  /** TBI-Cy 공여자 유형에 따라 실제 오더를 상호배타적으로 표시 */
+  /** Allo 공여자 유형에 따라 CsA/Tacrolimus 실제 오더를 상호배타적으로 표시 */
   donorType?: Exclude<ScheduleSettings["donorType"], null>
   rule: TimeRule
   /** 표시 순서 */
@@ -184,6 +192,33 @@ export function getHydrationTimes(rateCcHr: number): string[] {
     { length: Math.ceil(24 / intervalHours) },
     (_, index) => fromMinutes(index * intervalHours * 60),
   )
+}
+
+/**
+ * BSA로 계산된 hydration 속도의 1L bag 교환 시간.
+ * 고정 속도 hydration은 기존 getHydrationTimes 규칙을 유지한다.
+ */
+export function getCalculatedHydrationTimes(
+  rateCcHr: number,
+  day: number,
+  firstDay: number,
+): string[] {
+  if (!Number.isFinite(rateCcHr) || rateCcHr <= 0) return []
+
+  if (rateCcHr > 130) {
+    return ["00:00", "05:00", "10:00", "15:00", "20:00"]
+  }
+  if (rateCcHr > 85) return ["00:00", "08:00", "16:00"]
+  if (rateCcHr > 65) return ["00:00", "12:00"]
+
+  if (rateCcHr >= 45 && rateCcHr <= 65) {
+    // 16시간 간격을 자정 기준으로 연속 표시:
+    // 첫날 00:00/16:00 → 다음날 08:00 → 반복.
+    const dayOffset = ((day - firstDay) % 2 + 2) % 2
+    return dayOffset === 0 ? ["00:00", "16:00"] : ["08:00"]
+  }
+
+  return ["00:00"]
 }
 
 const DAY_MINUTES = 24 * 60
@@ -548,7 +583,7 @@ export function getMesnaTimes(ctxStartMin: number): string[] {
       const g = grid[i]
       if (g != null && Math.abs(g - t) <= 30) t = g
     }
-    out.push(t >= 1440 ? `${fromMinutes(t)}(익일)` : fromMinutes(t))
+    out.push(t >= 1440 ? `${fromMinutes(t)}(전일서명)` : fromMinutes(t))
   }
   return out
 }
@@ -620,7 +655,7 @@ const THIOBUCY_MEDS: MedDef[] = [
     noHoldFirstDose: true,
     days: [-4, -3],
     sort: 60,
-    rule: { type: "oral", freq: "bid" },
+    rule: { type: "fixed", times: ["08:00", "20:00"] },
   },
   {
     id: "cyclophosphamide",
@@ -910,20 +945,57 @@ const BUFLUBATG_MEDS: MedDef[] = [
     detail: "[MIV] <Mix> · miv over 3hrs",
     solvent: NS500,
     suffix: "ov3h",
-    note: "Fludarabine 종료 후 연속 투약 (동시 투약 불가)",
+    note: "",
     days: [-6, -5, -4, -3],
     sort: 11,
     rule: { type: "chemo", durationMin: 180 },
   },
   {
-    id: "levetiracetam-batg",
-    name: "Levetiracetam tab (Keppra)",
-    detail: "[P.O] · Sz prophylaxis",
+    id: "levetiracetam-loading-batg",
+    name: "Keppra 1g tab(Levetiracetam)",
+    detail: "1 tab [P.O] x1 · Busulfan 3hrs before",
     oral: true,
-    note: "Busulfan 3–4시간 전 loading 1500mg (D-6), 이후 500mg bid",
-    days: [-6, -5, -4, -3, -2],
-    sort: 60,
-    rule: { type: "oral", freq: "bid" },
+    holdMainOrder: true,
+    noHoldFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    days: [-6],
+    sort: 55,
+    rule: {
+      type: "relative",
+      ref: "busulfan-batg",
+      offsetMin: -180,
+      roundDownToHour: true,
+    },
+  },
+  {
+    id: "levetiracetam-loading-500mg-batg",
+    name: "Keppra 500mg tab(Levetiracetam)",
+    detail: "1 tab [P.O] x1 · Busulfan 3hrs before",
+    oral: true,
+    noHoldLast: true,
+    noEndMark: true,
+    noHoldFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    days: [-6],
+    sort: 56,
+    rule: {
+      type: "relative",
+      ref: "busulfan-batg",
+      offsetMin: -180,
+      roundDownToHour: true,
+    },
+  },
+  {
+    id: "levetiracetam-500mg-batg",
+    name: "Keppra 500mg tab(Levetiracetam)",
+    detail: "500 mg [P.O] bid · GFR <30이면 250mg bid",
+    oral: true,
+    noExtraOrder: true,
+    noHoldLast: true,
+    noHoldFirstDose: true,
+    days: [-5, -4, -3, -2],
+    sort: 57,
+    rule: { type: "fixed", times: ["08:00", "20:00"] },
   },
   {
     id: "granisetron-batg",
@@ -940,7 +1012,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
     name: "Thymoglobulin 25mg(Antithymocyteglobulin rabbit)",
     detail: "[MIV] <Mix> x1 · over 6hrs via I-med",
     solvent: NS500,
-    suffix: "ov6h",
+    suffix: "F/ov6hr",
     note: "1.5mg/kg/day (matched related) · 2.5mg/kg/day (unrelated/mismatched)",
     days: [-3, -2, -1],
     sort: 12,
@@ -951,7 +1023,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
     name: "Predisol 125mg inj(Methylprednisolone Na succinate)",
     detail: "[IV] <Mix> x2 · over 30mins",
     solvent: D5W100,
-    note: "Thymoglobulin 30분 전 투약 + 12시간 간격 2회 (통상 23:00)",
+    note: "ATG 30분 전 투약 + 12시간 간격",
     days: [-3, -2, -1],
     sort: 61,
     rule: { type: "relative", ref: "atg", offsetMin: -30, repeatEveryMin: 720, count: 2 },
@@ -959,26 +1031,46 @@ const BUFLUBATG_MEDS: MedDef[] = [
   {
     id: "acetaminophen-atg",
     name: "Acetaminophen삼남 300mg(Acetaminophen)",
-    detail: "2 tab [P.O] daily ++ · ATG premed -1hr",
+    detail: "2 tab [P.O] daily ++",
     oral: true,
+    timeNote: "ATG-1hr",
+    repeatDetailOnFirstDose: true,
     days: [-3, -2, -1],
     sort: 62,
     rule: { type: "relative", ref: "atg", offsetMin: -60 },
   },
   {
-    id: "chlorpheniramine-atg",
-    name: "Chlorpheniramine maleate 4mg/2mL inj 유한",
-    detail: "1 amp(2 mL) [IV] x1 · ATG premed -30min",
+    id: "hydroxyzine-atg",
+    name: "Adipam 10mg tab(Hydroxyzine)",
+    detail: "1 tab [P.O] ut dict",
+    oral: true,
+    timeNote: "ATG-1hr",
+    repeatDetailOnFirstDose: true,
+    firstDoseDetail: "1 tab [P.O] daily hs",
     days: [-3, -2, -1],
     sort: 63,
+    rule: { type: "relative", ref: "atg", offsetMin: -60 },
+  },
+  {
+    id: "chlorpheniramine-atg",
+    name: "Chlorpheniramine maleate 4mg/2mL inj유한",
+    detail: "1 amp(2 mL) [IV] x1",
+    timeNote: "ATG-30m",
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
+    days: [-3, -2, -1],
+    sort: 64,
     rule: { type: "relative", ref: "atg", offsetMin: -30 },
   },
   {
     id: "hydrocortisone-atg",
     name: "Cortisolu 100mg inj(Hydrocortisone)",
-    detail: "50 mg [IV] x1 [S] · ATG +30min",
+    detail: "50 mg [IV] x1 [S]",
+    timeNote: "ATG+30m",
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
     days: [-3, -2, -1],
-    sort: 64,
+    sort: 65,
     rule: { type: "relative", ref: "atg", offsetMin: 30 },
   },
   {
@@ -1003,13 +1095,31 @@ const BUFLUBATG_MEDS: MedDef[] = [
     rule: { type: "fixed", times: ["11:00"] },
   },
   {
+    id: "cyclosporine-batg",
+    name: "Sandimmun 250mg/5ml inj(Cyclosporin A)",
+    detail: "3 mg/kg/day [MIV] <Mix> x1 · continuous",
+    solvent: D5W_MIX,
+    suffix: "8ch",
+    continuous: true,
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
+    days: [-2, -1, 0, 1, 3, 4, 6],
+    donorType: "related",
+    sort: 65,
+    rule: { type: "fixed", times: ["09:00"] },
+  },
+  {
     id: "tacrolimus-batg",
     name: "Prograf 5mg/1mL inj(Tacrolimus)",
-    detail: "[MIV] <Mix> x1 · continuous",
-    solvent: "Normal saline 500mL bag 중외      1 bag  [IV]  <Mix>  x1",
+    detail: "0.04 mg/kg/day [MIV] <Mix> x1 · continuous",
+    suffix: "20ch",
+    solvent: NS500,
     continuous: true,
-    days: [-1, 0, 1, 3, 4, 6],
-    sort: 65,
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
+    days: [-2, -1, 0, 1, 3, 4, 6],
+    donorType: "unrelated",
+    sort: 66,
     rule: { type: "fixed", times: ["09:00"] },
   },
   {
@@ -1017,7 +1127,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
     name: "Dextrose 5% & Na K2 1L bag(D5W/na77mEq/K20mEq)",
     detail: "[IV] hydration",
     sup: true,
-    timeNote: "125ch",
+    firstTimeNote: "125ch",
     days: [-6, -5, -4, -3],
     sort: 80,
     rule: { type: "hydration", rateCcHr: 125 },
@@ -1034,8 +1144,8 @@ const BUFLUBATG_MEDS: MedDef[] = [
   },
   {
     id: "acyclovir-batg",
-    name: "Acyclovir 200mg tab",
-    detail: "400 mg (2 tab) [P.O] bid",
+    name: "진양Acyclovir 400mg tab",
+    detail: "400 mg [P.O] bid",
     oral: true,
     continuous: true,
     days: [-6, -5, -4, -3, -2, -1, 0],
@@ -1082,7 +1192,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
 ]
 
 /* ============================================================ *
- * BuFlu-PTCy  (컨디셔닝 D-6~D-2, PTCy D+3/D+4)
+ * BuFlu-PTCy  (Fludarabine D-7~D-3, Busulfan D-7~D-4, PTCy D+3/D+4)
  * ============================================================ */
 const BUFLU_PTCY_MEDS: MedDef[] = [
   {
@@ -1091,7 +1201,7 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     detail: "[IV] <Mix> x1 · over 1hr",
     solvent: NS100,
     suffix: "ov1h",
-    days: [-6, -5, -4, -3, -2],
+    days: [-7, -6, -5, -4, -3],
     sort: 10,
     rule: { type: "chemo", durationMin: 60 },
   },
@@ -1102,25 +1212,63 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     solvent: NS500,
     suffix: "ov3h",
     note: "Fludarabine 종료 후 연속 투약",
-    days: [-5, -4, -3, -2],
+    days: [-7, -6, -5, -4],
     sort: 11,
     rule: { type: "chemo", durationMin: 180 },
   },
   {
-    id: "levetiracetam-ptcy",
-    name: "Levetiracetam tab (Keppra)",
-    detail: "[P.O] · Sz prophylaxis",
+    id: "levetiracetam-loading-ptcy",
+    name: "Keppra 1g tab(Levetiracetam)",
+    detail: "1 tab [P.O] x1 · Busulfan 3hrs before",
     oral: true,
-    days: [-5, -4, -3, -2],
-    sort: 60,
-    rule: { type: "oral", freq: "bid" },
+    holdMainOrder: true,
+    noHoldFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    days: [-7],
+    sort: 55,
+    rule: {
+      type: "relative",
+      ref: "busulfan-ptcy",
+      offsetMin: -180,
+      roundDownToHour: true,
+    },
+  },
+  {
+    id: "levetiracetam-loading-500mg-ptcy",
+    name: "Keppra 500mg tab(Levetiracetam)",
+    detail: "1 tab [P.O] x1 · Busulfan 3hrs before",
+    oral: true,
+    noHoldLast: true,
+    noEndMark: true,
+    noHoldFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    days: [-7],
+    sort: 56,
+    rule: {
+      type: "relative",
+      ref: "busulfan-ptcy",
+      offsetMin: -180,
+      roundDownToHour: true,
+    },
+  },
+  {
+    id: "levetiracetam-500mg-ptcy",
+    name: "Keppra 500mg tab(Levetiracetam)",
+    detail: "500 mg [P.O] bid · GFR <30이면 250mg bid",
+    oral: true,
+    noExtraOrder: true,
+    noHoldLast: true,
+    noHoldFirstDose: true,
+    days: [-6, -5, -4, -3],
+    sort: 57,
+    rule: { type: "fixed", times: ["08:00", "20:00"] },
   },
   {
     id: "granisetron-ptcy",
     name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
-    days: [-6, -5, -4, -3, -2],
+    days: [-7, -6, -5, -4, -3, -2],
     sort: 5,
     firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
@@ -1131,7 +1279,6 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     detail: "50 mg/kg [MIV] <Mix> · miv over 1hr",
     solvent: D5W200,
     suffix: "ov1h",
-    timeNote: "얼음/EKG",
     note: "D+3, D+4 (stem cell infusion 후 72시간)",
     days: [3, 4],
     sort: 10,
@@ -1142,10 +1289,28 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     name: "Kanitron 3mg/3mL inj(Granisetron)      3 mg(3 mL)  [IV]   x1",
     detail: "3 mg [IV] qd",
     solvent: NS50,
-    days: [3, 4],
+    days: [3],
     sort: 5,
     firstDoseExtra: true,
     rule: { type: "antiemetic-iv" },
+  },
+  {
+    id: "aprepitant 125mg-ptcy-post",
+    name: "Emend 125mg cap(Aprepitant)",
+    detail: "1 cap [P.O] daily ut dict",
+    oral: true,
+    days: [3],
+    sort: 6,
+    rule: { type: "pre-chemo", offsetMin: -60 },
+  },
+  {
+    id: "aprepitant 80mg-ptcy-post",
+    name: "Emend 80mg cap(Aprepitant)",
+    detail: "1 cap [P.O] daily ut dict",
+    oral: true,
+    days: [4, 5],
+    sort: 6,
+    rule: { type: "fixed", times: ["08:00"] },
   },
   {
     id: "mesna-ptcy",
@@ -1162,7 +1327,7 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     name: "Dextrose 5% & Na K2 1L bag(D5W/na77mEq/K20mEq)",
     detail: "[IV] conditioning hydration · 125ch",
     sup: true,
-    timeNote: "125ch",
+    firstTimeNote: "125ch",
     days: [-3, -2],
     sort: 80,
     rule: { type: "hydration", rateCcHr: 125 },
@@ -1203,14 +1368,33 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     rule: { type: "ekg-monitoring", ref: "ptcy" },
   },
   {
+    id: "cyclosporine-ptcy",
+    name: "Sandimmun 250mg/5ml inj(Cyclosporin A)",
+    detail: "3 mg/kg/day [MIV] <Mix> x1 · D+5부터",
+    solvent: D5W200,
+    suffix: "8ch",
+    continuous: true,
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
+    note: "GVHD prophylaxis (CNI) — PTCy 종료 후 개시",
+    days: [5],
+    donorType: "related",
+    sort: 65,
+    rule: { type: "fixed", times: ["09:00"] },
+  },
+  {
     id: "tacrolimus-ptcy",
     name: "Prograf 5mg/1mL inj(Tacrolimus)",
-    detail: "0.02 mg/kg/day [MIV] <Mix> x1 · D+5부터",
-    solvent: "Normal saline 500mL bag 중외      1 bag  [IV]  <Mix>  x1",
+    detail: "0.04 mg/kg/day [MIV] <Mix> x1 · D+5부터",
+    solvent: NS500,
+    suffix: "20ch",
     continuous: true,
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
     note: "GVHD prophylaxis (CNI) — PTCy 종료 후 개시",
-    days: [4],
-    sort: 65,
+    days: [5],
+    donorType: "unrelated",
+    sort: 66,
     rule: { type: "fixed", times: ["09:00"] },
   },
   {
@@ -1219,9 +1403,9 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     detail: "15 mg/kg [P.O] tid · D+5 ~ D+35",
     oral: true,
     continuous: true,
-    days: [4],
-    sort: 66,
-    rule: { type: "oral", freq: "tid" },
+    days: [5],
+    sort: 67,
+    rule: { type: "fixed", times: ["07:00", "14:00", "22:00"] },
   },
   {
     id: "citopcin-ptcy",
@@ -1235,8 +1419,8 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
   },
   {
     id: "acyclovir-ptcy",
-    name: "Acyclovir 200mg tab",
-    detail: "400 mg (2 tab) [P.O] bid",
+    name: "진양Acyclovir 400mg tab",
+    detail: "400 mg [P.O] bid",
     oral: true,
     continuous: true,
     days: [-6, -5, -4, -3, -2, -1, 0, 3, 4],
@@ -1279,7 +1463,25 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     sort: 1,
     rule: { type: "fixed", times: ["17:00"] },
   },
-  vitaminKOrder("vitk", [-6, 1]),
+  {
+    id: "grasin-ptcy",
+    name: "Grasin 300mcg/0.7mL PFS(Filgrastim)",
+    detail: "300 mcg(0.7 mL) [IV] x1",
+    bundleItems: [
+      {
+        name: "Grasin 150mcg/0.6mL PFS(Filgrastim)",
+        detail: "150 mcg(0.6 mL) [IV] x1",
+      },
+      {
+        name: "Dextrose 5% 50mL bag 중외",
+        detail: "1 bag [IV] x1",
+      },
+    ],
+    days: [5],
+    sort: 78,
+    rule: { type: "fixed", times: ["14:00"] },
+  },
+  vitaminKOrder("vitk", [-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]),
 ]
 
 /* ============================================================ *
@@ -1364,7 +1566,7 @@ const BUCYETO_MEDS: MedDef[] = [
     noHoldFirstDose: true,
     days: [-6, -5, -4],
     sort: 57,
-    rule: { type: "oral", freq: "bid" },
+    rule: { type: "fixed", times: ["08:00", "20:00"] },
   },
   {
     id: "granisetron-iv-bucyeto",
@@ -1576,7 +1778,7 @@ const BUMEL_MEDS: MedDef[] = [
     noHoldFirstDose: true,
     days: [-5, -4, -3],
     sort: 57,
-    rule: { type: "oral", freq: "bid" },
+    rule: { type: "fixed", times: ["08:00", "20:00"] },
   },
   {
     id: "melphalan-bumel",
@@ -1609,28 +1811,31 @@ const BUMEL_MEDS: MedDef[] = [
     rule: { type: "fixed", times: ["08:00"] },
   },
   {
-    id: "hyd-mel-bumel",
-    name: "Dextrose 5% Na K2 1L bag (D5WNa77K20)",
-    detail: "[IV] Melphalan -6hr~+12hr 250ch, 그 외 75ch",
+    id: "hydration-high-bumel",
+    name: "Dextrose 5% & Na K2 1L bag(D5W/Na77mEq/K20mEq)",
+    detail: "[IV] 3L/m²/day hydration",
     sup: true,
-    days: [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3],
+    days: [-6, -5, -4, -3, -2, -1, 0],
     sort: 80,
-    rule: {
-      type: "melphalan-hydration",
-      regimenId: "bumel",
-      melphalanDays: [-3, -2],
-      activeStartDay: -6,
-      activeEndDay: 3,
-      reviewDay: null,
-    },
+    rule: { type: "hydration", rateCcHr: 125 },
+  },
+  {
+    id: "hydration-low-bumel",
+    name: "Dextrose 5% & Na K2 1L bag(D5W/Na77mEq/K20mEq)",
+    detail: "[IV] 1.5L/m²/day hydration",
+    sup: true,
+    days: [1, 2, 3],
+    sort: 80,
+    rule: { type: "hydration", rateCcHr: 63 },
   },
   {
     id: "furosemide 10mg-bumel",
     name: "Lasix inj 20mg (Furosemide) 10mg",
     detail: "10 mg [IVS] PRN · if 6hr u/o <1L",
+    tit: true,
     days: [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3],
     sort: 85,
-    rule: { type: "prn" },
+    rule: { type: "fixed", times: [] },
   },
   {
     id: "urine-output-bumel",
@@ -1701,75 +1906,101 @@ const BUMEL_MEDS: MedDef[] = [
 /* ============================================================ *
  * TBI-Cy  (AlloSCT)
  * ============================================================ */
+const TBI_CY_ORDER_DAYS = [-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 3, 6]
+
 const TBI_CY_MEDS: MedDef[] = [
   {
     id: "tbi",
-    name: "Total Body Irradiation (TBI) 300rad",
+    name: "Total Body Irradiation (TBI)",
     detail: "Radiation treatment · send to TR with H-cath capped",
-    suffix: "300rad",
     days: [-7, -6, -5, -4],
     sort: 10,
-    rule: {
-      type: "procedure",
-      defaultTime: "09:00",
-      options: ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"],
-    },
+    rule: { type: "fixed", times: ["00:00"] },
   },
   {
     id: "tbi-acetaminophen",
-    name: "Acetaminophen 650mg tab",
-    detail: "650 mg [P.O] · TBI premed",
+    name: "Tacenol ER 650mg tab_8hours(Acetaminophen)",
+    detail: "1 tab [P.O] · TBI premed",
     oral: true,
-    noExtraOrder: true,
-    note: "원문에 상대시각이 없어 TBI -30분으로 배치함; 시행 전 확인",
+    holdFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    noHoldLast: true,
+    noEndMark: true,
+    note: "",
     days: [-7, -6, -5, -4],
     sort: 1,
-    rule: { type: "relative", ref: "tbi", offsetMin: -30 },
+    rule: { type: "fixed", times: ["16:00"] },
   },
   {
     id: "tbi-diazepam",
-    name: "Diazepam 10mg",
-    detail: "10 mg [P.O] · TBI premed; 10mg syringe loaded for TR",
+    name: "Diazepam 5mg tab(Diazepam)",
+    detail: "2 tab [P.O] · TBI premed",
     oral: true,
-    noExtraOrder: true,
-    note: "원문에 상대시각이 없어 TBI -30분으로 배치함; 시행 전 확인",
+    controlled: true,
+    holdFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    noHoldLast: true,
+    noEndMark: true,
+    note: "",
     days: [-7, -6, -5, -4],
     sort: 2,
-    rule: { type: "relative", ref: "tbi", offsetMin: -30 },
+    rule: { type: "fixed", times: ["16:00"] },
   },
   {
     id: "tbi-hydrocortisone",
-    name: "Hydrocortisone 100mg inj",
+    name: "Cortisolu 100mg inj(Hydrocortisone)",
     detail: "100 mg [IV] · TBI premed",
-    note: "원문에 상대시각이 없어 TBI -30분으로 배치함; 시행 전 확인",
+    firstDoseExtra: true,
+    holdFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    noHoldLast: true,
+    noEndMark: true,
+    note: "",
     days: [-7, -6, -5, -4],
     sort: 3,
-    rule: { type: "relative", ref: "tbi", offsetMin: -30 },
+    rule: { type: "fixed", times: ["16:00"] },
   },
   {
     id: "tbi-metoclopramide",
-    name: "Metoclopramide 10mg inj",
+    name: "Meckool 10mg/2ml inj(Metoclopramide)",
     detail: "10 mg [IV] · TBI premed",
-    note: "원문에 상대시각이 없어 TBI -30분으로 배치함; 시행 전 확인",
+    suffix: "ns50",
+    firstDoseExtra: true,
+    holdFirstDose: true,
+    repeatDetailOnFirstDose: true,
+    noHoldLast: true,
+    noEndMark: true,
+    note: "",
     days: [-7, -6, -5, -4],
     sort: 4,
-    rule: { type: "relative", ref: "tbi", offsetMin: -30 },
+    rule: { type: "fixed", times: ["16:00"] },
+  },
+  {
+    id: "tbi-diazepam-prn",
+    name: "Diazepam 10mg/2mL inj 삼진(Diazepam)",
+    detail: "",
+    controlled: true,
+    prnBadge: true,
+    days: [-7, -6, -5, -4],
+    sort: 6,
+    rule: { type: "fixed", times: [] },
   },
   {
     id: "granisetron-iv-tbi",
     name: "Kanitron 3mg/3mL inj (Granisetron)",
     detail: "3 mg [IV] qd · TBI antiemetic",
     solvent: NS_MIX,
+    suffix: "단독",
     days: [-7, -6, -5, -4],
     sort: 5,
     firstDoseExtra: true,
-    rule: { type: "relative", ref: "tbi", offsetMin: -30 },
+    rule: { type: "fixed", times: ["11:00"] },
   },
   {
     id: "cyclophosphamide-tbi-cy",
     name: "Endoxane 500mg inj(Cyclophosphamide)",
     detail: "[MIV] <Mix> · miv over 1hr",
-    solvent: D5W_MIX,
+    solvent: D5W200,
     suffix: "ov1h",
     timeNote: "얼음/EKG",
     days: [-3, -2],
@@ -1821,7 +2052,7 @@ const TBI_CY_MEDS: MedDef[] = [
     solvent: NS50,
     days: [-2, -1, 0],
     sort: 7,
-    rule: { type: "fixed", times: ["08:00"] },
+    rule: { type: "fixed", times: ["11:00"] },
   },
   {
     id: "mesna-tbi-cy",
@@ -1879,11 +2110,11 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "atg-tbi-cy",
-    name: "Thymoglobulin 25mg (Rabbit ATG)",
+    name: "Thymoglobulin 25mg(Antithymocyteglobulin rabbit)",
     detail: "[MIV] <Mix> · over 6hrs via I-med",
     solvent: NS_MIX,
-    suffix: "ov6h",
-    note: "Unrelated donor에서 지정의 confirm 후 사용. Cyclophosphamide와의 순서는 원문 미지정이며 source listing 순으로 배치.",
+    suffix: "F/ov6hr",
+    note: "Unrelated donor에서 지정의 confirm 후 사용.",
     days: [-3, -2],
     donorType: "unrelated",
     sort: 12,
@@ -1902,10 +2133,11 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "acetaminophen-atg-tbi-cy",
-    name: "Acetaminophen 600mg",
-    detail: "600 mg [P.O] · ATG premed -1hr",
+    name: "Acetaminophen삼남 300mg(Acetaminophen)",
+    detail: "2 tab [P.O] daily ++",
     oral: true,
-    noExtraOrder: true,
+    timeNote: "ATG-1hr",
+    repeatDetailOnFirstDose: true,
     days: [-3, -2],
     donorType: "unrelated",
     sort: 31,
@@ -1913,10 +2145,12 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "hydroxyzine-atg-tbi-cy",
-    name: "Hydroxyzine 1 tab",
-    detail: "1 tab [P.O] · ATG premed -1hr",
+    name: "Adipam 10mg tab(Hydroxyzine)",
+    detail: "1 tab [P.O] ut dict",
     oral: true,
-    noExtraOrder: true,
+    timeNote: "ATG-1hr",
+    repeatDetailOnFirstDose: true,
+    firstDoseDetail: "1 tab [P.O] daily hs",
     days: [-3, -2],
     donorType: "unrelated",
     sort: 32,
@@ -1924,8 +2158,11 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "chlorpheniramine-atg-tbi-cy",
-    name: "Chlorpheniramine maleate 4mg/2mL inj",
-    detail: "4 mg [IV] · ATG premed -30min",
+    name: "Chlorpheniramine maleate 4mg/2mL inj유한",
+    detail: "1 amp(2 mL) [IV] x1",
+    timeNote: "ATG-30m",
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
     days: [-3, -2],
     donorType: "unrelated",
     sort: 33,
@@ -1933,8 +2170,11 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "hydrocortisone-atg-tbi-cy",
-    name: "Hydrocortisone 50mg inj",
-    detail: "50 mg [IV] · ATG +30min",
+    name: "Cortisolu 100mg inj(Hydrocortisone)",
+    detail: "50 mg [IV] x1 [S]",
+    timeNote: "ATG+30m",
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
     days: [-3, -2],
     donorType: "unrelated",
     sort: 34,
@@ -1944,8 +2184,11 @@ const TBI_CY_MEDS: MedDef[] = [
     id: "cyclosporine-tbi-cy",
     name: "Sandimmun 250mg/5ml inj(Cyclosporin A)",
     detail: "3 mg/kg/day [MIV]",
-    solvent: D5W_MIX,
+    suffix: "8ch",
+    solvent: D5W200,
     continuous: true,
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
     note: "",
     days: [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7],
     donorType: "related",
@@ -1956,8 +2199,10 @@ const TBI_CY_MEDS: MedDef[] = [
     id: "tacrolimus-tbi-cy",
     name: "Prograf inj (Tacrolimus)",
     detail: "0.04 mg/kg/day [MIV]",
-    solvent: NS_MIX,
+    solvent: NS500,
     continuous: true,
+    firstDoseExtra: true,
+    repeatDetailOnFirstDose: true,
     note: "",
     days: [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7],
     donorType: "unrelated",
@@ -1966,7 +2211,7 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "mtx-d1-tbi-cy",
-    name: "Methotrexate inj (MTX)",
+    name: "Pfizer Methotrexate 50mg/2mL inj(Methotrexate)",
     detail: "15 mg/m² [IVP] · GVHD prophylaxis",
     timeNote: "이식<>24hr",
     days: [1],
@@ -1979,7 +2224,7 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "mtx-d3d6-tbi-cy",
-    name: "Methotrexate inj (MTX)",
+    name: "Pfizer Methotrexate 50mg/2mL inj(Methotrexate)",
     detail: "10 mg/m² [IVP] · GVHD prophylaxis",
     days: [3, 6],
     sort: 13,
@@ -2023,7 +2268,7 @@ const TBI_CY_MEDS: MedDef[] = [
   },
   {
     id: "acyclovir-tbi-cy",
-    name: "Acyclovir 200mg tab",
+    name: "진양Acyclovir 400mg tab",
     detail: "400 mg [P.O] bid · HSV prophylaxis",
     oral: true,
     continuous: true,
@@ -2067,7 +2312,25 @@ const TBI_CY_MEDS: MedDef[] = [
     sort: 76,
     rule: { type: "fixed", times: ["08:00"] },
   },
-  vitaminKOrder("vitk", [-8, -1, 6]),
+  {
+    id: "grasin-tbi-cy",
+    name: "Grasin 300mcg/0.7mL PFS(Filgrastim)",
+    detail: "300 mcg(0.7 mL) [IV] x1",
+    bundleItems: [
+      {
+        name: "Grasin 150mcg/0.6mL PFS(Filgrastim)",
+        detail: "150 mcg(0.6 mL) [IV] x1",
+      },
+      {
+        name: "Dextrose 5% 50mL bag 중외",
+        detail: "1 bag [IV] x1",
+      },
+    ],
+    days: [1, 3, 6],
+    sort: 78,
+    rule: { type: "fixed", times: ["14:00"] },
+  },
+  vitaminKOrder("vitk", TBI_CY_ORDER_DAYS),
 ]
 
 /* ============================================================ *
@@ -2213,19 +2476,53 @@ function medsForRegimen(regimenId: string): MedDef[] | null {
   return isAutoRegimen(regimenId) ? [...meds, ...AUTO_D0_MEDS] : meds
 }
 
+/**
+ * 전날 실제 Mesna 오더가 있었고 오늘은 없는 경우, 원문 Mesna 행에만
+ * 전일서명 수행시간을 표시한다. 연속 투약 중간 날짜는 제외된다.
+ */
+export function getMesnaCarryoverMedIds(
+  regimenId: string | null,
+  day: number,
+  donorType: ScheduleSettings["donorType"] = null,
+): string[] {
+  if (!regimenId) return []
+  const meds = medsForRegimen(regimenId)
+  if (!meds) return []
+  return meds
+    .filter(
+      (med) =>
+        med.rule.type === "mesna" &&
+        med.days.includes(day - 1) &&
+        !med.days.includes(day) &&
+        (med.donorType == null || med.donorType === donorType),
+    )
+    .map((med) => med.id)
+}
+
 export function getOrderDaysForRegimen(regimenId: string | null): number[] {
   const meds = regimenId ? medsForRegimen(regimenId) : null
   if (!meds) return CONDITIONING_DAYS
   const set = new Set<number>()
   meds.forEach((m) => m.days.forEach((d) => set.add(d)))
   const days = [...set].sort((a, b) => a - b)
-  return regimenId === "bucyeto" ? days.filter((day) => day <= 0) : days
+  if (regimenId === "bucyeto") return days.filter((day) => day <= 0)
+  if (regimenId === "bumel") {
+    return days.filter((day) => day !== 2 && day !== 3 && day !== 7)
+  }
+  if (regimenId === "buflubatg") return days.filter((day) => day !== 4)
+  if (regimenId === "buflu-ptcy") return days.filter((day) => day !== 1 && day !== 2)
+  if (regimenId === "tbi-cy") return days.filter((day) => TBI_CY_ORDER_DAYS.includes(day))
+  return days
 }
 
 export interface OrderMedWithMeta extends OrderMed {
   note?: string
   sup?: boolean
   tit?: boolean
+  /** 향정신성의약품 뱃지 */
+  controlled?: boolean
+  /** PRN 뱃지 */
+  prnBadge?: boolean
   /** 묶음 오더의 용매 줄 */
   solvent?: string
   /** 용매가 아닌 추가 약품 묶음 줄 */
@@ -2234,6 +2531,8 @@ export interface OrderMedWithMeta extends OrderMed {
   timeNote?: string
   /** 첫 수행시간 뒤 부가 표기 */
   firstTimeNote?: string
+  /** 계산형 hydration의 날짜별 교환 phase 기준일 */
+  hydrationStartDay?: number
   suffixEachTime?: boolean
   /** (단독) 표기 */
   solo?: boolean
@@ -2246,6 +2545,8 @@ export interface OrderMedWithMeta extends OrderMed {
   noHoldFirstDose?: boolean
   /** +1 행에도 작은 용법·용량 줄을 반복 표시 */
   repeatDetailOnFirstDose?: boolean
+  /** +1 행 전용 용법·용량 */
+  firstDoseDetail?: string
 }
 
 /** 수동 시간 선택값. key는 `${day}:${medId}` */
@@ -2436,6 +2737,8 @@ function resolveTimes(
     case "oral": {
       const isFirstChemoDay = day === firstChemoDay
       const isAfterFirstChemoDay = firstChemoDay != null && day > firstChemoDay
+      const firstMedicationDay = Math.min(...med.days)
+      const isAfterFirstMedicationDay = day > firstMedicationDay
       const initialChemoStart = getChemoStartTime(settings)
       const keepLateSchedule = initialChemoStart === "16:30" || initialChemoStart === "17:30"
       const useRegularSchedule = isAfterFirstChemoDay && !keepLateSchedule
@@ -2451,6 +2754,11 @@ function resolveTimes(
       }
 
       if (rule.freq === "tid") {
+        // UDCA는 첫 투약일에만 늦은 시작시간(18:00/22:00 등)을 따르고,
+        // 그 다음 투약일부터는 항상 일반 TID 시간으로 복귀한다.
+        if (med.id.startsWith("ursa") && isAfterFirstMedicationDay) {
+          return ["08:00", "12:00", "18:00"]
+        }
         if (useRegularSchedule) return ["08:00", "12:00", "18:00"]
         return getTidOralTimes(settings)
       }
@@ -2459,6 +2767,9 @@ function resolveTimes(
       return [getQdOralTime(settings, rule.base)]
     }
     case "mycamine":
+      if (med.id === "mycamine-batg" && day > Math.min(...med.days)) {
+        return ["16:00"]
+      }
       return [getMycamineTime(settings)]
     case "hydration":
       return getHydrationTimes(rule.rateCcHr)
@@ -2547,18 +2858,27 @@ export function getOrderMedsForDay(
         note: m.note,
         sup: m.sup,
         tit: m.tit,
+        controlled: m.controlled,
+        prnBadge: m.prnBadge,
         solvent: m.solvent,
         bundleItems: m.bundleItems,
         timeNote: m.timeNote,
         firstTimeNote:
-          m.rule.type === "ekg-monitoring" && day === sortedDays[0]
-            ? "start"
-            : undefined,
+          m.id === "tbi"
+            ? `TBI#${sortedDays.indexOf(day) + 1}/${sortedDays.length}`
+            : m.firstTimeNote ??
+              (m.rule.type === "ekg-monitoring" && day === sortedDays[0]
+                ? "start"
+                : undefined),
+        hydrationStartDay:
+          m.rule.type === "hydration" ? sortedDays[0] : undefined,
         solo: m.rule.type === "antiemetic-iv",
         repeatDetailOnFirstDose: m.repeatDetailOnFirstDose,
+        firstDoseDetail: m.firstDoseDetail,
         holdMainOrder: m.holdMainOrder,
         holdFirstDose: m.holdFirstDose,
-        noHoldFirstDose: m.noHoldFirstDose,
+        // 늦은 첫 투약에서 UDCA +1 오더에는 조제유보를 표시하지 않는다.
+        noHoldFirstDose: m.noHoldFirstDose || m.id.startsWith("ursa"),
         firstDose:
           !m.noExtraOrder &&
           ((m.oral === true && day === sortedDays[0]) ||

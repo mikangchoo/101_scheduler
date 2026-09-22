@@ -244,8 +244,9 @@ export function adjustRegimenLines(rawLines: RenderLine[], opts: AdjustOptions):
 
     /* 6. Cyclophosphamide: 60mg/kg 이상일 때만 얼음/EKG */
     if (text.trimStart().startsWith("Cyclophosphamide") && line.annotation?.includes("얼음")) {
+      const doseSegment = line.segments?.find((segment) => segment.dose?.unit === "mg/kg")
       const m = text.match(/\(\s*([\d.]+)\s*mg\/kg\)/)
-      const perKg = m ? Number.parseFloat(m[1]) : Number.NaN
+      const perKg = Number.parseFloat(doseSegment?.text ?? m?.[1] ?? "")
       if (!Number.isFinite(perKg) || perKg < 60) line.annotation = undefined
     }
 

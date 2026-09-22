@@ -19,6 +19,9 @@ interface Props {
  */
 export function OrderMedRow({ med, times, onChange, alt }: Props) {
   const bundled = Boolean(med.solvent || med.bundleItems?.length)
+  const firstDoseDetail = med.firstDoseDetail ?? med.detail
+  const hideDoseOnFirstDose =
+    med.id.startsWith("cyclosporine") || med.id.startsWith("tacrolimus")
   const showHoldFirstDose =
     med.holdFirstDose === true ||
     (!med.noHoldFirstDose &&
@@ -46,6 +49,8 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
           <div className="min-w-0">
             <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
               {(med.lastOralDose || med.holdMainOrder) && <HoldIcon />}
+              {med.controlled && <Badge kind="향정" />}
+              {med.prnBadge && <Badge kind="PRN" />}
               {med.tit && <Badge kind="TIT" />}
               {med.sup && <Badge kind="SUP" />}
               <span className="break-words">{med.name}</span>
@@ -140,15 +145,16 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
             <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold not-italic text-ocs-text">
               <PlusOneIcon />
               {showHoldFirstDose && <HoldIcon />}
+              {med.controlled && <Badge kind="향정" />}
               <span className="break-words">{med.name}</span>
-              {med.doseText && (
+              {med.doseText && !hideDoseOnFirstDose && (
                 <span className="whitespace-nowrap text-red-500 print:text-red-600">
                   {med.doseText}
                 </span>
               )}
             </p>
-            {med.repeatDetailOnFirstDose && med.detail && (
-              <p className="break-words text-[11px] not-italic text-ocs-muted">{med.detail}</p>
+            {med.repeatDetailOnFirstDose && firstDoseDetail && (
+              <p className="break-words text-[11px] not-italic text-ocs-muted">{firstDoseDetail}</p>
             )}
             {med.bundleItems?.map((item) => (
               <div className="mt-1 min-w-0" key={`${med.id}-first-${item.name}`}>
@@ -203,14 +209,15 @@ function HoldIcon() {
 }
 
 /** PRN_order.png 스타일 상태 뱃지 */
-export function Badge({ kind }: { kind: "SUP" | "PRN" | "TIT" }) {
+export function Badge({ kind }: { kind: "SUP" | "PRN" | "TIT" | "향정" }) {
   return (
     <span
       className={cn(
         "not-italic rounded-sm px-1 py-[1px] text-[10px] font-bold leading-none text-white",
         kind === "SUP" && "bg-[#27788f]",
-        kind === "PRN" && "bg-sky-700",
+        kind === "PRN" && "bg-emerald-600",
         kind === "TIT" && "bg-amber-600",
+        kind === "향정" && "bg-fuchsia-600",
       )}
     >
       {kind}
@@ -242,28 +249,35 @@ function FixedTime({
   return (
     <span className="inline-flex max-w-full flex-wrap items-center whitespace-normal break-words font-mono text-[13px] not-italic">
       <span className="inline-flex flex-wrap gap-x-4 gap-y-1">
-        {times.map((t, i) => (
-          <span className="inline-flex items-center" key={`${t}-${i}`}>
-            <span className="text-ocs-time">{t}/</span>
-            {suffixEachTime && suffix && (
-              <span className="text-ocs-highlight">({suffix})</span>
-            )}
-            {i === 0 && firstTimeNote && (
-              <span className="text-ocs-highlight">({firstTimeNote})</span>
-            )}
-            {i === 0 && rateNote && (
-              <span className="text-ocs-highlight">({rateNote})</span>
-            )}
-            {i === lastIndex && solo && <span className="text-ocs-highlight">(단독)</span>}
-            {i === lastIndex && suffix && !suffixEachTime && (
-              <span className="text-ocs-highlight">({suffix})</span>
-            )}
-            {i === lastIndex && timeNote && (
-              <span className="text-ocs-highlight">({timeNote})</span>
-            )}
-            {i === lastIndex && endMark && <span className="text-ocs-highlight">(end)</span>}
-          </span>
-        ))}
+        {times.map((t, i) => {
+          const match = t.match(/^([^()]+)(?:\((.*)\))?$/)
+          const time = match?.[1] ?? t
+          const inlineNote = match?.[2]
+          return (
+            <span className="inline-flex items-center" key={`${t}-${i}`}>
+              <span className="text-ocs-time">{time}</span>
+              {inlineNote && <span className="text-ocs-highlight">({inlineNote})</span>}
+              {suffixEachTime && suffix && (
+                <span className="text-ocs-highlight">({suffix})</span>
+              )}
+              {i === 0 && firstTimeNote && (
+                <span className="text-ocs-highlight">({firstTimeNote})</span>
+              )}
+              {i === 0 && rateNote && (
+                <span className="text-ocs-highlight">({rateNote})</span>
+              )}
+              {i === lastIndex && solo && <span className="text-ocs-highlight">(단독)</span>}
+              {i === lastIndex && suffix && !suffixEachTime && (
+                <span className="text-ocs-highlight">({suffix})</span>
+              )}
+              {i === lastIndex && timeNote && (
+                <span className="text-ocs-highlight">({timeNote})</span>
+              )}
+              {i === lastIndex && endMark && <span className="text-ocs-highlight">(end)</span>}
+              <span className="text-ocs-time">/</span>
+            </span>
+          )
+        })}
       </span>
     </span>
   )
@@ -296,7 +310,6 @@ function SelectTime({
         </select>
         <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ocs-muted" />
       </div>
-      <span className="font-mono text-[13px] text-ocs-time">/</span>
       {med.suffix && (
         <span className="whitespace-normal font-mono text-[13px] text-ocs-highlight">
           ({med.suffix})
@@ -307,6 +320,7 @@ function SelectTime({
           ({med.timeNote})
         </span>
       )}
+      <span className="font-mono text-[13px] text-ocs-time">/</span>
     </div>
   )
 }

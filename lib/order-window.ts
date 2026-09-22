@@ -3,8 +3,9 @@ import type { DoseOverrides } from "@/lib/dose-overrides"
 import { buildRegimenLines, type RenderLine } from "@/lib/regimen-render"
 import {
   getOrderMedsForDay,
+  getCalculatedHydrationTimes,
   getFirstChemoDay,
-  getHydrationTimes,
+  getMesnaCarryoverMedIds,
   hasChemoForDay,
   type OrderTimeOverrides,
   type OrderMedWithMeta,
@@ -130,7 +131,7 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
   { test: (id) => id.startsWith("letermovir"), keywords: ["letermovir", "Letermovir"] },
   { test: (id) => id.startsWith("tmp-smx"), keywords: ["TMP/SMX"] },
   { test: (id) => id.startsWith("fluconazole"), keywords: ["fluconazole", "Fluconazole"] },
-  { test: (id) => id.startsWith("mmf"), keywords: ["MMF", "Mycophenolate"] },
+  { test: (id) => id.startsWith("mmf"), keywords: ["Mycophenolate mofetil", "Mycophenolate"] },
   { test: (id) => id.startsWith("stemcell"), keywords: ["Stem cell infusion"] },
 ]
 
@@ -141,12 +142,34 @@ const ANCHORS: { test: (id: string) => boolean; keywords: string[] }[] = [
  */
 const SOURCE_LINE_ID_BY_MED_ID: Record<string, string> = {
   "levetiracetam 500mg": "levetiracetam",
+  "levetiracetam-loading-batg": "levetiracetam",
+  "levetiracetam-loading-500mg-batg": "levetiracetam",
+  "levetiracetam-500mg-batg": "levetiracetam-maintenance-batg",
+  "levetiracetam-loading-ptcy": "levetiracetam",
+  "levetiracetam-loading-500mg-ptcy": "levetiracetam",
+  "levetiracetam-500mg-ptcy": "levetiracetam-maintenance-ptcy",
+  "granisetron-ptcy": "ae-ptcy-iv",
+  "granisetron-ptcy-post": "ae-ptcy-post-iv",
+  "aprepitant 125mg-ptcy-post": "ae-ptcy-post-iv",
+  "aprepitant 80mg-ptcy-post": "ae-ptcy-post-po",
+  "grasin-ptcy": "gcsf",
+  "granisetron-batg": "ae-batg-iv",
+  "acetaminophen-atg": "atg-premed-1hr",
+  "hydroxyzine-atg": "atg-premed-1hr",
+  "chlorpheniramine-atg": "atg-premed-30min",
+  "hydrocortisone-atg": "atg-post-hydrocortisone",
+  "cyclosporine-batg": "batg-csa",
+  "tacrolimus-batg": "batg-tacrolimus",
+  "mtx-d1": "mtx",
+  "mtx-d3d6": "mtx",
   "hydration-high-thiobucy": "tbc-furosemide",
   "furosemide 10mg-thiobucy": "tbc-furosemide",
   "urine-output-thiobucy": "tbc-furosemide",
   "hydration-high-ptcy": "ptcy-furosemide",
   "furosemide 10mg-ptcy": "ptcy-furosemide",
   "urine-output-ptcy": "ptcy-furosemide",
+  "cyclosporine-ptcy": "csa",
+  "tacrolimus-ptcy": "tacrolimus",
   "busulfan-bucyeto": "bucyeto-busulfan",
   "etoposide-bucyeto": "bucyeto-etoposide",
   "cyclophosphamide-bucyeto": "bucyeto-cyclophosphamide",
@@ -161,12 +184,17 @@ const SOURCE_LINE_ID_BY_MED_ID: Record<string, string> = {
   "levetiracetam-loading-bumel": "bumel-levetiracetam-loading",
   "levetiracetam-500mg-bumel": "bumel-levetiracetam-maintenance",
   "melphalan-bumel": "bumel-melphalan",
+  "hydration-high-bumel": "bumel-furosemide",
+  "hydration-low-bumel": "bumel-furosemide",
+  "furosemide 10mg-bumel": "bumel-furosemide",
+  "urine-output-bumel": "bumel-furosemide",
   "ivig-bumel": "bumel-ivig",
   tbi: "tbi",
   "tbi-acetaminophen": "tbi-premed-acetaminophen",
   "tbi-diazepam": "tbi-premed-diazepam",
   "tbi-hydrocortisone": "tbi-premed-hydrocortisone",
   "tbi-metoclopramide": "tbi-premed-metoclopramide",
+  "tbi-diazepam-prn": "tbi-send-patient",
   "cyclophosphamide-tbi-cy": "tbi-cy-cyclophosphamide",
   "mesna-tbi-cy": "tbi-cy-mesna",
   "furosemide 10mg-tbi-cy": "tbi-cy-furosemide",
@@ -176,12 +204,14 @@ const SOURCE_LINE_ID_BY_MED_ID: Record<string, string> = {
   "atg-tbi-cy": "tbi-cy-atg",
   "mpred-tbi-cy": "tbi-cy-mpred",
   "acetaminophen-atg-tbi-cy": "tbi-cy-atg-premed-1h",
+  "hydroxyzine-atg-tbi-cy": "tbi-cy-atg-premed-1h",
   "chlorpheniramine-atg-tbi-cy": "tbi-cy-atg-premed-30m",
   "hydrocortisone-atg-tbi-cy": "tbi-cy-atg-post-hydrocortisone",
   "cyclosporine-tbi-cy": "tbi-cy-csa",
   "tacrolimus-tbi-cy": "tbi-cy-tacrolimus",
   "mtx-d1-tbi-cy": "tbi-cy-mtx",
   "mtx-d3d6-tbi-cy": "tbi-cy-mtx",
+  "grasin-tbi-cy": "tbi-cy-gcsf",
   "letermovir-tbi-cy": "tbi-cy-cmv-letermovir",
   "acyclovir-tbi-cy": "tbi-cy-acyclovir",
   "fludarabine-fc": "fc-fludarabine",
@@ -286,6 +316,18 @@ function extractDoseText(line: RenderLine, medId: string): string | undefined {
   return `${format(halfMg)} mg(${format(halfMl)} mL)`
 }
 
+/** Cyclophosphamide 60mg/kg 이상에서만 수행시간에 얼음/EKG를 표시한다. */
+function cyclophosphamideTimeNote(
+  medName: string,
+  line: RenderLine | undefined,
+): string | undefined {
+  if (!/Cyclophosphamide/i.test(medName) || !line?.segments) return undefined
+  const perKg = line.segments.find((segment) => segment.dose?.unit === "mg/kg")
+  if (!perKg) return undefined
+  const value = Number.parseFloat(perKg.text.replaceAll(",", ""))
+  return Number.isFinite(value) && value >= 60 ? "얼음/EKG" : undefined
+}
+
 interface SolventDoseDisplay {
   text: string
   calculated: boolean
@@ -346,6 +388,16 @@ function anchorIndex(medId: string, lines: RenderLine[]): number {
   return -1
 }
 
+/** 실제 Mesna 오더가 끝난 다음 날, 원문 Mesna 줄에 전일서명 시간만 표시한다. */
+function addMesnaCarryoverTimes(lines: RenderLine[], medIds: string[]): RenderLine[] {
+  if (medIds.length === 0) return lines
+  const indices = new Set(medIds.map((medId) => anchorIndex(medId, lines)).filter((idx) => idx >= 0))
+  if (indices.size === 0) return lines
+  return lines.map((line, index) =>
+    indices.has(index) ? { ...line, orderTimes: ["05:00(전일서명)"] } : line,
+  )
+}
+
 /** 표시 위치를 옮긴 오더도 용량·속도 계산은 자신의 원문 줄에서 읽는다. */
 function calculationAnchorIndex(medId: string, lines: RenderLine[]): number {
   const direct = lines.findIndex((line) => line.id === medId)
@@ -381,10 +433,13 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
   const hasChemo = hasChemoForDay(regimenId, day)
   const eff = effectiveSettings(settings, day, firstChemoDay ?? day)
 
-  const sourceLines = addOrderOnlyLines(
-    regimenId,
-    day,
-    buildRegimenLines(regimenId, calc, doseOverrides),
+  const sourceLines = addMesnaCarryoverTimes(
+    addOrderOnlyLines(
+      regimenId,
+      day,
+      buildRegimenLines(regimenId, calc, doseOverrides, settings.donorType),
+    ),
+    getMesnaCarryoverMedIds(regimenId, day, settings.donorType),
   )
   const lines = sourceLines.map(sanitizeLine)
   const rawMeds = getOrderMedsForDay(
@@ -400,8 +455,12 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
   const meds = rawMeds.map((med) => {
     const idx = calculationAnchorIndex(med.id, sourceLines)
     const line = idx >= 0 ? sourceLines[idx] : undefined
+    const isCyclophosphamide = /Cyclophosphamide/i.test(med.name)
     const doseText =
-      line && med.id !== "acyclovir-tbi-cy"
+      line &&
+      med.id !== "acyclovir-tbi-cy" &&
+      !med.id.startsWith("grasin-") &&
+      !med.id.startsWith("mmf")
         ? extractDoseText(line, med.id)
         : undefined
     const solventDose =
@@ -412,10 +471,17 @@ export function buildOrderWindow(input: OrderWindowInput): OrderWindow {
     const rateNote = dynamicHydration && idx >= 0 ? extractRateNote(sourceLines, idx) : undefined
     const defaultTimes =
       rateNote && dynamicHydration
-        ? getHydrationTimes(Number.parseFloat(rateNote.replaceAll(",", "")))
+        ? getCalculatedHydrationTimes(
+            Number.parseFloat(rateNote.replaceAll(",", "")),
+            day,
+            med.hydrationStartDay ?? day,
+          )
         : med.defaultTimes
     return {
       ...med,
+      timeNote: isCyclophosphamide
+        ? cyclophosphamideTimeNote(med.name, line)
+        : med.timeNote,
       doseText,
       solventDoseText: solventDose?.text,
       solventDoseCalculated: solventDose?.calculated,

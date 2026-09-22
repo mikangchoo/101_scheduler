@@ -2,6 +2,7 @@ import type { CalcResult } from "@/lib/calc"
 import { round } from "@/lib/calc"
 import { type DoseKey, type DoseOverrides, mergeDoseOverrides } from "@/lib/dose-overrides"
 import { getBusulfanFluidVolume } from "@/lib/busulfan-fluid"
+import type { DonorType } from "@/lib/schedule-settings"
 
 export type LineKind = "title" | "section" | "sub" | "normal" | "spacer"
 
@@ -34,6 +35,8 @@ export interface RenderLine {
   checkbox?: boolean
   /** stable id for checkbox state */
   id?: string
+  /** 오더창의 레지멘 원문 행 우측에만 표시할 수행시간 */
+  orderTimes?: string[]
 }
 
 function n(v: number, decimals = 0): string {
@@ -329,6 +332,8 @@ function buildBufluATG(c: CalcResult, dose: Doses): RenderLine[] {
   const mpredMg = n(dose.mpred_mg_kg * c.tbw, 0)
   const mtxD1 = n(dose.mtx_mg_m2 * c.bsa, 1)
   const mtxD36 = n(10 * c.bsa, 1)
+  const csaMg = n(dose.csa_mg_kg * c.tbw, 1)
+  const tacMg = n(dose.tacrolimus_mg_kg_day * c.tbw, 2)
   const hyd = n((125 * 24) / 24, 0)
 
   return [
@@ -359,7 +364,12 @@ function buildBufluATG(c: CalcResult, dose: Doses): RenderLine[] {
       checkbox: true,
       id: "levetiracetam",
     },
-    { text: "다음날부터 500mg PO bid (D-5 ~ D-2), GFR 30 미만인 경우 250mg bid", indent: 2, italic: true },
+    {
+      id: "levetiracetam-maintenance-batg",
+      text: "다음날부터 500mg PO bid (D-5 ~ D-2), GFR 30 미만인 경우 250mg bid",
+      indent: 2,
+      italic: true,
+    },
     { text: "", kind: "spacer" },
 
     {
@@ -388,8 +398,8 @@ function buildBufluATG(c: CalcResult, dose: Doses): RenderLine[] {
         { text: "mg/kg) miv over 6 hrs via I-med" },
       ],
     },
-    { text: "1.5 mg/kg/day for matched related donors", indent: 1, italic: true },
-    { text: "2.5 mg/kg/day for matched unrelated / mismatched related (haplo) donors", indent: 1, italic: true },
+    { text: "1.5 mg/kg/day for related donors", indent: 1, italic: true },
+    { text: "2.5 mg/kg/day for unrelated donors", indent: 1, italic: true },
     { text: "N/S (final conc. 0.5mg/ml – ATG 용량의 2배 양에 해당하는 희석 수액 처방)", indent: 1, italic: true },
     { text: "D-3, D-2, D-1", indent: 1, italic: true },
     { text: "", kind: "spacer" },
@@ -482,7 +492,33 @@ function buildBufluATG(c: CalcResult, dose: Doses): RenderLine[] {
     { text: "4) GVHD prophylaxis", kind: "section", italic: true },
     { text: "★ related donor (matched sibling, haploidentical): CsA + MTX", indent: 1, italic: true },
     { text: "★ unrelated donor (KMDP, JMDP 등): tacrolimus + MTX", indent: 1, italic: true },
-    { text: "4-1. Cyclosporin A (related) 3mg/kg civ (D-2) / Tacrolimus (unrelated) 0.04 mg/kg/day IV (D-2)", indent: 1, italic: true },
+    {
+      indent: 1,
+      checkbox: true,
+      id: "batg-csa",
+      segments: [
+        { text: "4-1. Cyclosporin A (related) " },
+        { text: `${csaMg} mg`, red: true },
+        { text: " (" },
+        { text: d(dose.csa_mg_kg), dose: { key: "csa_mg_kg", unit: "mg/kg" } },
+        { text: "mg/kg) civ (D-2)" },
+      ],
+    },
+    {
+      indent: 1,
+      checkbox: true,
+      id: "batg-tacrolimus",
+      segments: [
+        { text: "Tacrolimus (unrelated) " },
+        { text: `${tacMg} mg`, red: true },
+        { text: " (" },
+        {
+          text: d(dose.tacrolimus_mg_kg_day),
+          dose: { key: "tacrolimus_mg_kg_day", unit: "mg/kg/day" },
+        },
+        { text: "mg/kg/day) IV (D-2)" },
+      ],
+    },
     {
       indent: 1,
       checkbox: true,
@@ -518,8 +554,8 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
   const ptcyMg = n(dose.ptcy_mg_kg * c.tbw, 0)
   const mmfMg = n(dose.mmf_mg_kg * c.tbw, 0)
   const hyd3 = n((3000 * c.bsa) / 24, 0)
-  const csaMg = n(3 * c.tbw, 1)
-  const tacMg = n(0.04 * c.tbw, 2)
+  const csaMg = n(dose.csa_mg_kg * c.tbw, 1)
+  const tacMg = n(dose.tacrolimus_mg_kg_day * c.tbw, 2)
 
   return [
     { text: "Busulfan/Fludarabine-PTCy Conditioning [MAC]", kind: "title" },
@@ -564,13 +600,18 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
       checkbox: true,
       id: "levetiracetam",
     },
-    { text: "→ 다음날부터 500mg PO bid (D-6~D-3), GFR 30 미만인 경우 250mg bid", indent: 2, italic: true },
+    {
+      id: "levetiracetam-maintenance-ptcy",
+      text: "→ 다음날부터 500mg PO bid (D-6~D-3), GFR 30 미만인 경우 250mg bid",
+      indent: 2,
+      italic: true,
+    },
     { text: "", kind: "spacer" },
 
     {
       checkbox: true,
       id: "conditioning-cyclo",
-      annotation: "얼음/EKG",
+      annotation: dose.conditioning_cyclo_mg_kg >= 60 ? "얼음/EKG" : undefined,
       segments: [
         { text: "Cyclophosphamide " },
         { text: `${condCycloMg} mg`, red: true },
@@ -595,7 +636,7 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
     {
       checkbox: true,
       id: "ptcy",
-      annotation: "얼음/EKG",
+      annotation: dose.ptcy_mg_kg >= 60 ? "얼음/EKG" : undefined,
       segments: [
         { text: "Cyclophosphamide " },
         { text: `${ptcyMg} mg`, red: true },
@@ -655,7 +696,11 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
 
     { text: "3) GVHD prophylaxis", kind: "section", italic: true },
     { text: "3-1. Post-transplant cyclophosphamide (regimen 참조)", italic: true },
-    { text: "※ PTCy D0~D5 사이 steroid 사용하지 않도록 주의", indent: 1, italic: true },
+    {
+      segments: [{ text: "※ PTCy D0~D5 사이 steroid 사용하지 않도록 주의", red: true }],
+      indent: 1,
+      italic: true,
+    },
     { text: "3-2. Cyclosporin A or tacrolimus + MMF", italic: true },
     { text: "★ related donor (matched sibling, haploidentical): CsA + MMF", indent: 1, italic: true },
     { text: "★ unrelated donor (KMDP, JMDP 등): tacrolimus + MMF", indent: 1, italic: true },
@@ -666,7 +711,9 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
       segments: [
         { text: "Cyclosporine A " },
         { text: `${csaMg} mg`, red: true },
-        { text: " (3mg/kg) civ: D+5부터 시작" },
+        { text: " (" },
+        { text: d(dose.csa_mg_kg), dose: { key: "csa_mg_kg", unit: "mg/kg" } },
+        { text: "mg/kg) civ: D+5부터 시작" },
       ],
     },
     { text: "이후 혈청 cyclosporin level 보고 therapeutic range 250-400ng/mL로 titration (target range 지정의 확인)", indent: 2, italic: true },
@@ -678,7 +725,12 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
       segments: [
         { text: "Tacrolimus " },
         { text: `${tacMg} mg`, red: true },
-        { text: " (0.04 mg/kg/day) IV loading: D+5부터 시작" },
+        { text: " (" },
+        {
+          text: d(dose.tacrolimus_mg_kg_day),
+          dose: { key: "tacrolimus_mg_kg_day", unit: "mg/kg/day" },
+        },
+        { text: "mg/kg/day) IV loading: D+5부터 시작" },
       ],
     },
     { text: "Target 5~15ng/mL, 경구 전환 시 IV 용량의 약 3.5배를 2회 분할(10AM, 10PM), 경구투약 전날 10PM IV 중단 (up to day 90~180)", indent: 2, italic: true },
@@ -723,8 +775,18 @@ function buildBufluPTCy(c: CalcResult, dose: Doses): RenderLine[] {
       id: "ae-ptcy-iv",
     },
     { text: "D-1~D0  Serotonin antagonist PO (IV와 동일 제제 투여)", indent: 1, italic: true },
-    { text: "D+3  Aprepitant 125mg po qd + Serotonin antagonist IV", indent: 1, italic: true },
-    { text: "D+4~D+5  Aprepitant 80mg po qd", indent: 1, italic: true },
+    {
+      id: "ae-ptcy-post-iv",
+      text: "D+3  Aprepitant 125mg po qd + Serotonin antagonist IV",
+      indent: 1,
+      italic: true,
+    },
+    {
+      id: "ae-ptcy-post-po",
+      text: "D+4~D+5  Aprepitant 80mg po qd",
+      indent: 1,
+      italic: true,
+    },
     { text: "※ antiemetics로도 steroid 사용하지 않습니다.", indent: 1, italic: true },
     { text: "prn) lorazepam 0.5-2mg IV q4-6h OR metoclopramide 10mg IV q8h or olanzapine[D] 5~10mg po", indent: 1, italic: true },
     { text: "※ olanzapine 투여 시 metoclopramide 병용 금기", indent: 1, italic: true },
@@ -825,6 +887,7 @@ function buildBuCyEto(c: CalcResult, dose: Doses): RenderLine[] {
     {
       checkbox: true,
       id: "bucyeto-cyclophosphamide",
+      annotation: dose.cyclo_mg_kg >= 60 ? "얼음/EKG" : undefined,
       segments: [
         { text: "Cyclophosphamide " },
         { text: `${n(cycloMgNum, 0)} mg`, red: true },
@@ -1046,8 +1109,20 @@ function buildBuMel(c: CalcResult, dose: Doses): RenderLine[] {
         { text: " (1.5L/m²/day), D1 - D3, then tapering" },
       ],
     },
-    { text: "PRN) Furosemide 10mg", indent: 2, italic: true, checkbox: false },
-    { text: "Check urine output, pH q 6 hr", indent: 2, italic: true, checkbox: false },
+    {
+      id: "bumel-furosemide",
+      text: "PRN) Furosemide 10mg",
+      indent: 2,
+      italic: true,
+      checkbox: false,
+    },
+    {
+      id: "bumel-urine-output",
+      text: "Check urine output, pH q 6 hr",
+      indent: 2,
+      italic: true,
+      checkbox: false,
+    },
     { text: "if 6hr u/o < 1L, furosemide 1A iv", indent: 2, italic: true, checkbox: false },
     { text: "", kind: "spacer" },
 
@@ -1140,10 +1215,6 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
   const cycloMgNum = dose.cyclo_mg_kg * c.tbw
   const hydrationHigh = (dose.hydration_ml_m2_day * c.bsa) / 24
   const hydrationLow = (dose.hydration_taper_ml_m2_day * c.bsa) / 24
-  const ivigMg = dose.ivig_mg_kg * c.tbw
-  const ganciclovirMg = dose.ganciclovir_mg_kg * c.tbw
-  const acyclovirIvMg = dose.acyclovir_iv_mg_m2 * c.bsa
-  const gcsfUg = dose.gcsf_ug_m2 * c.bsa
   const csaMg = dose.csa_mg_kg * c.tbw
   const tacrolimusMg = dose.tacrolimus_mg_kg_day * c.tbw
   const mtxD1Mg = dose.mtx_mg_m2 * c.bsa
@@ -1162,7 +1233,7 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
     {
       text: "Total Body Irradiation (TBI) 300rad x 1",
       italic: true,
-      checkbox: true,
+      checkbox: false,
       id: "tbi",
     },
     { text: "premed: Acetaminophen 650mg po", indent: 1, italic: true, checkbox: true, id: "tbi-premed-acetaminophen" },
@@ -1170,6 +1241,7 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
     { text: "Hydrocortisone 100mg iv", indent: 1, italic: true, checkbox: true, id: "tbi-premed-hydrocortisone" },
     { text: "Metoclopramide 10mg iv", indent: 1, italic: true, checkbox: true, id: "tbi-premed-metoclopramide" },
     {
+      id: "tbi-send-patient",
       text: "Send patient to TR with H-cath capped & diazepam 10mg loaded in syringe",
       indent: 1,
       italic: true,
@@ -1329,10 +1401,8 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
       checkbox: false,
       segments: [
         { text: "IVIg " },
-        { text: `${n(ivigMg, 0)} mg`, red: true },
-        { text: " (" },
         { text: d(dose.ivig_mg_kg), dose: { key: "ivig_mg_kg", unit: "mg/kg" } },
-        { text: ") iv (D+7부터 2 주간격으로, 3개월까지격주로 500mg/kg, 그후 6개월까지매월 500mg/kg (최장9개월급여)" },
+        { text: " iv (D+7부터 2 주간격으로, 3개월까지격주로 500mg/kg, 그후 6개월까지매월 500mg/kg (최장9개월급여)" },
       ],
     },
     {
@@ -1345,10 +1415,8 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
       checkbox: false,
       segments: [
         { text: "ganciclovir " },
-        { text: `${n(ganciclovirMg, 1)} mg`, red: true },
-        { text: " (" },
         { text: d(dose.ganciclovir_mg_kg), dose: { key: "ganciclovir_mg_kg", unit: "mg/kg" } },
-        { text: ") bid IV for 1 week followed by 5mg/kg qd IV from ANC>1000 till D100" },
+        { text: " bid IV for 1 week followed by 5mg/kg qd IV from ANC>1000 till D100" },
       ],
     },
     {
@@ -1356,10 +1424,8 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
       id: "tbi-cy-acyclovir",
       segments: [
         { text: "3-6.HSV prophylaxis: acyclovir 400 mg PO bid (D-8~D+30); PO 복용 불가 시 IV " },
-        { text: `${n(acyclovirIvMg, 1)} mg`, red: true },
-        { text: " (" },
         { text: d(dose.acyclovir_iv_mg_m2), dose: { key: "acyclovir_iv_mg_m2", unit: "mg/m²" } },
-        { text: ") q12h over 1hr로 변경, ganciclovir 등 사용 시 acyclovir는 중단" },
+        { text: " q12h over 1hr로 변경, ganciclovir 등 사용 시 acyclovir는 중단" },
       ],
     },
     {
@@ -1368,8 +1434,6 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
       segments: [
         { text: "3-7.G-CSF: Filgrastim " },
         { text: d(dose.gcsf_ug_m2), dose: { key: "gcsf_ug_m2", unit: "ug/m²" } },
-        { text: " = " },
-        { text: `${n(gcsfUg, 0)} ug`, red: true },
         { text: " (or 450 ug) SQ or MIVs (보험기준상 ANC 3000까지 투여 가능)" },
       ],
     },
@@ -1571,21 +1635,21 @@ function buildTbiCy(c: CalcResult, dose: Doses): RenderLine[] {
       text: "G-CSF 600 ug S.Q. qd 9PM (D-4, D-3, D-2, D-1, (D0))",
       indent: 1,
       italic: true,
-      checkbox: true,
+      checkbox: false,
       id: "tbi-cy-donor-gcsf",
     },
     {
       text: "POST-BMT TEST (STR) sampling (D0) (if not done previously)",
       indent: 1,
       italic: true,
-      checkbox: true,
+      checkbox: false,
       id: "tbi-cy-donor-str",
     },
     {
       text: "CBC(em) D0, (D1), (D2) 7AM and post-collection",
       indent: 1,
       italic: true,
-      checkbox: true,
+      checkbox: false,
       id: "tbi-cy-donor-cbc",
     },
     { text: "iCa++, e'/BUN/Cr x2/day", indent: 1, italic: true, checkbox: false },
@@ -1884,10 +1948,14 @@ export function buildRegimenLines(
   regimenId: string | null,
   calc: CalcResult,
   overrides: DoseOverrides = {},
+  donorType: DonorType = null,
 ): RenderLine[] {
   if (!regimenId) return []
   const builder = BUILDERS[regimenId]
   if (!builder) return []
   const dose = mergeDoseOverrides(regimenId, overrides) as Doses
+  if (regimenId === "buflubatg" && donorType != null) {
+    dose.atg_mg_kg = donorType === "related" ? 1.5 : 2.5
+  }
   return withDayCheckboxes(builder(calc, dose))
 }
