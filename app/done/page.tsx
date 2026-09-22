@@ -47,6 +47,17 @@ export default function DonePage() {
         <p className="mt-2 text-pretty text-sm leading-relaxed text-muted-foreground">
           레지멘 확인과 오더 스케줄링이 모두 완료되었습니다. 새로운 환자의 스케줄을 작성하려면 처음부터 다시 시작하세요.
         </p>
+        <div
+          role="note"
+          className="mt-6 w-full rounded-xl border border-border bg-muted/40 px-5 py-4 text-left text-sm leading-relaxed text-muted-foreground"
+        >
+          <p>
+            본 애플리케이션은 표준화된 레지멘을 이용하여  스케줄링 가이드라인을 제시하는 목적으로 만들어졌습니다.
+          </p>
+          <p className="mt-2 font-medium text-foreground">
+            실제 환자에게 적용 시에는 레지멘의 세부 내용(투약일과 용량 등)을 반드시 재확인하시기 바랍니다.
+          </p>
+        </div>
         <button
           onClick={startOver}
           className="mt-8 inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
