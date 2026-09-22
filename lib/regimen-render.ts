@@ -1020,8 +1020,6 @@ function buildBuMel(c: CalcResult, dose: Doses): RenderLine[] {
   const reducedMelphalanMg = 50 * c.bsa
   const hydrationHigh = (dose.hydration_ml_m2_day * c.bsa) / 24
   const hydrationLow = (dose.hydration_taper_ml_m2_day * c.bsa) / 24
-  const ivigMg = dose.ivig_mg_kg * c.tbw
-  const ganciclovirMg = dose.ganciclovir_mg_kg * c.tbw
 
   return [
     { text: "BuMel Conditioning for AutoSCT", kind: "title" },
@@ -1148,10 +1146,8 @@ function buildBuMel(c: CalcResult, dose: Doses): RenderLine[] {
       id: "bumel-ivig",
       segments: [
         { text: "IVIg " },
-        { text: `${n(ivigMg, 0)} mg`, red: true },
-        { text: " (" },
         { text: d(dose.ivig_mg_kg), dose: { key: "ivig_mg_kg", unit: "mg/kg" } },
-        { text: ") iv (D7 부터 2 주간격으로, 3개월까지격주로 500mg/kg, 그후 6개월까지매월 500mg/kg (최장9개월급여))" },
+        { text: " iv (D7 부터 2 주간격으로, 3개월까지격주로 500mg/kg, 그후 6개월까지매월 500mg/kg (최장9개월급여))" },
       ],
     },
     {
@@ -1164,10 +1160,8 @@ function buildBuMel(c: CalcResult, dose: Doses): RenderLine[] {
       indent: 1,
       segments: [
         { text: "ganciclovir " },
-        { text: `${n(ganciclovirMg, 1)} mg`, red: true },
-        { text: " (" },
         { text: d(dose.ganciclovir_mg_kg), dose: { key: "ganciclovir_mg_kg", unit: "mg/kg" } },
-        { text: ") bid IV for 1 week followed by 5mg/kg qd IV from ANC>1000 till D100" },
+        { text: " bid IV for 1 week followed by 5mg/kg qd IV from ANC>1000 till D100" },
       ],
     },
     { text: "Vit K 10mg iv weekly:", italic: true, checkbox: true, id: "bumel-vitk" },

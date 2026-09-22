@@ -817,6 +817,7 @@ const THIOBUCY_MEDS: MedDef[] = [
     id: "stemcell-premed",
     name: "Chlorepheniramine meleate 4mg/2ml inj유한",
     detail: "1 amp(2 mL) [IV] x1",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "fixed", times: ["14:00"] },
@@ -909,6 +910,7 @@ const HDMEL_MEDS: MedDef[] = [
     id: "stemcell-premed",
     name: "Chlorepheniramine meleate 4mg/2ml inj유한",
     detail: "1 amp(2 mL) [IV] x1",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "fixed", times: ["14:00"] },
@@ -1184,6 +1186,7 @@ const BUFLUBATG_MEDS: MedDef[] = [
     id: "stemcell-premed-allo",
     name: "Chlorepheniramine meleate 4mg/2ml inj유한",
     detail: "1 amp(2 mL) [IV] x1",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "fixed", times: ["17:00"] },
@@ -1459,6 +1462,7 @@ const BUFLU_PTCY_MEDS: MedDef[] = [
     id: "stemcell-premed-allo",
     name: "Chlorepheniramine meleate 4mg/2ml inj유한",
     detail: "1 amp(2 mL) [IV] x1",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "fixed", times: ["17:00"] },
@@ -1710,8 +1714,9 @@ const BUCYETO_MEDS: MedDef[] = [
   },
   {
     id: "stemcell-premed-bucyeto",
-    name: "Chlorpheniramine maleate 4mg/2mL inj",
-    detail: "4 mg [IVS] x1 · stem cell infusion 동일시간",
+    name: "CChlorpheniramine maleate 4mg/2mg inj유한",
+    detail: "4 mg [IVS] x1",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "relative", ref: "stemcell-auto-bucyeto", offsetMin: 0 },
@@ -1894,8 +1899,9 @@ const BUMEL_MEDS: MedDef[] = [
   },
   {
     id: "stemcell-premed-bumel",
-    name: "Chlorpheniramine maleate 4mg/2mL inj",
-    detail: "4 mg [IVS] x1 · stem cell infusion 동일시간",
+    name: "Chlorpheniramine maleate 4mg/2mg inj유한",
+    detail: "4 mg [IVS] x1 ",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "relative", ref: "stemcell-auto-bumel", offsetMin: 0 },
@@ -2200,6 +2206,7 @@ const TBI_CY_MEDS: MedDef[] = [
     name: "Prograf inj (Tacrolimus)",
     detail: "0.04 mg/kg/day [MIV]",
     solvent: NS500,
+    suffix: "20ch",
     continuous: true,
     firstDoseExtra: true,
     repeatDetailOnFirstDose: true,
@@ -2241,7 +2248,8 @@ const TBI_CY_MEDS: MedDef[] = [
   {
     id: "stemcell-premed-tbi-cy",
     name: "Chlorpheniramine maleate 4mg/2mL inj",
-    detail: "4 mg [IVS] x1 · stem cell infusion 동일시간",
+    detail: "4 mg [IVS] x1 ",
+    suffix: "이식pre",
     days: [0],
     sort: 1,
     rule: { type: "relative", ref: "stemcell-allo-tbi-cy", offsetMin: 0 },
@@ -2370,6 +2378,7 @@ const FC_MEDS: MedDef[] = [
     id: "chlorpheniramine-cell-infusion-fc",
     name: "Chlorpheniramine maleate 4mg/2mg inj유한",
     detail: "1 amp(2ml) [IV] x1",
+    suffix: "이식pre",
     days: [1],
     sort: 21,
     firstDoseExtra: true,
@@ -2473,7 +2482,17 @@ const AUTO_D0_MEDS: MedDef[] = [
 function medsForRegimen(regimenId: string): MedDef[] | null {
   const meds = REGIMEN_MEDS[regimenId]
   if (!meds) return null
-  return isAutoRegimen(regimenId) ? [...meds, ...AUTO_D0_MEDS] : meds
+  const allMeds = isAutoRegimen(regimenId) ? [...meds, ...AUTO_D0_MEDS] : [...meds]
+  const allOrderDays = [
+    ...new Set(allMeds.flatMap((med) => med.days)),
+  ].sort((a, b) => a - b)
+  const hasVitaminK = allMeds.some((med) => med.name.startsWith("Vitamin K1"))
+
+  // Vit. K는 레지멘별 개별 날짜 목록과 무관하게 모든 오더 날짜에 항상 표시한다.
+  if (!hasVitaminK) return [...allMeds, vitaminKOrder("vitk", allOrderDays)]
+  return allMeds.map((med) =>
+    med.name.startsWith("Vitamin K1") ? { ...med, days: allOrderDays } : med,
+  )
 }
 
 /**

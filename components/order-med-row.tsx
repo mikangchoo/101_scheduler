@@ -66,38 +66,16 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
             )}
           </div>
 
-          <div className="min-w-0 text-left sm:shrink-0 sm:text-right">
-            {med.scheduleKind === "thiotepa" ? (
-              <SelectTime med={med} times={times} onChange={onChange} />
-            ) : med.scheduleKind === "citopcin" ? (
-              <EditableTime
-                times={times}
-                options={[
-                  { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
-                  { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
-                ]}
-              />
-            ) : med.scheduleKind === "ursa" ? (
-              <EditableTime
-                times={times}
-                options={[
-                  { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
-                  { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
-                ]}
-              />
-            ) : (
-              <FixedTime
-                times={times}
-                suffix={med.suffix}
-                suffixEachTime={med.suffixEachTime}
-                firstTimeNote={med.firstTimeNote}
-                timeNote={med.timeNote}
-                solo={med.solo}
-                rateNote={med.rateNote}
-                endMark={med.endMark}
-              />
-            )}
-          </div>
+          {times.length > 0 && (
+            <div
+              className={cn(
+                "min-w-0 text-left sm:shrink-0 sm:text-right",
+                bundled && "hidden sm:block",
+              )}
+            >
+              <ScheduleControl med={med} times={times} onChange={onChange} />
+            </div>
+          )}
         </div>
 
         {/* 용매 줄 — 수행시간 없음 */}
@@ -136,6 +114,13 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
             <span aria-hidden="true" />
           </div>
         ))}
+
+        {/* 좁은 화면의 묶음오더는 용매·추가 구성품 다음에 수행시간을 표시한다. */}
+        {bundled && times.length > 0 && (
+          <div className="px-3 pb-1.5 pl-6 pt-1 text-left sm:hidden">
+            <ScheduleControl med={med} times={times} onChange={onChange} />
+          </div>
+        )}
       </div>
 
       {/* 첫 투약 — +1 오더 (스케줄링 없음, 묶음 밖) */}
@@ -173,6 +158,46 @@ export function OrderMedRow({ med, times, onChange, alt }: Props) {
         </div>
       )}
     </div>
+  )
+}
+
+function ScheduleControl({ med, times, onChange }: Pick<Props, "med" | "times" | "onChange">) {
+  if (med.scheduleKind === "thiotepa") {
+    return <SelectTime med={med} times={times} onChange={onChange} />
+  }
+  if (med.scheduleKind === "citopcin") {
+    return (
+      <EditableTime
+        times={times}
+        options={[
+          { label: "12:00", onSelect: () => onChange(applyCitopcinEdit("12:00")) },
+          { label: "삭제", onSelect: () => onChange(applyCitopcinEdit("delete")) },
+        ]}
+      />
+    )
+  }
+  if (med.scheduleKind === "ursa") {
+    return (
+      <EditableTime
+        times={times}
+        options={[
+          { label: "12:00", onSelect: () => onChange(applyUrsaEdit("12:00")) },
+          { label: "18:00", onSelect: () => onChange(applyUrsaEdit("18:00")) },
+        ]}
+      />
+    )
+  }
+  return (
+    <FixedTime
+      times={times}
+      suffix={med.suffix}
+      suffixEachTime={med.suffixEachTime}
+      firstTimeNote={med.firstTimeNote}
+      timeNote={med.timeNote}
+      solo={med.solo}
+      rateNote={med.rateNote}
+      endMark={med.endMark}
+    />
   )
 }
 

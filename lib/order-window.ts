@@ -535,7 +535,7 @@ export const PRN_ORDERS: PrnOrder[] = [
   { id: "lasix", name: "Lasix inj 20mg (Furosemide)", detail: "20 mg [IV] prn", badge: "PRN" },
   {
     id: "chlorph-prn",
-    name: "Chlorpheniramine inj 4mg",
+    name: "Chlorpheniramine maleate 4mg/2mg inj유한",
     detail: "4 mg [IVS] prn",
     badge: "PRN",
   },
