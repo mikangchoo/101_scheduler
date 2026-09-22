@@ -2708,6 +2708,11 @@ function resolveTimes(
     case "relative": {
       const base = anchors[rule.ref]
       if (base == null) return []
+      // Busulfan이 12:00에 시작하는 날은 Keppra 로딩 총 1.5g
+      // (1g + 500mg 개별 오더)을 모두 08:00에 투약한다.
+      if (med.id.includes("levetiracetam-loading") && fromMinutes(base) === "12:00") {
+        return ["08:00"]
+      }
       const count = rule.count ?? 1
       const step = rule.repeatEveryMin ?? 0
       return Array.from({ length: count }, (_, i) => {
